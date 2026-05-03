@@ -60,11 +60,13 @@ async function markProcessed(id: string, error: string | null) {
 async function handleIgMessage(pageId: string, ev: IgMessagingEvent) {
   if (!ev.message?.text || ev.message.is_echo) return;
 
-  // Find the meta_account by page_id (or by recipient ig business id)
+  // For the Instagram Login flow the entry.id == ig_user_id (no page_id at all).
+  // For the legacy Facebook Login flow it was the page_id. Match either.
+  const recipientId = ev.recipient?.id ?? '';
   const { data: account } = await db
     .from('meta_accounts')
     .select('id, org_id, ig_user_id, page_id, access_token, username')
-    .or(`page_id.eq.${pageId},ig_user_id.eq.${ev.recipient?.id ?? ''}`)
+    .or(`ig_user_id.eq.${pageId},page_id.eq.${pageId},ig_user_id.eq.${recipientId}`)
     .limit(1)
     .single();
 

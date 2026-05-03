@@ -1,14 +1,12 @@
-// Handles the redirect back from Facebook after the user grants (or denies) permissions.
-// On success, we resolve the user's Page → Instagram Business account, store tokens,
-// and subscribe the page to message webhooks.
+// Handles the redirect back from Instagram after the user grants (or denies) permissions.
+// Uses the Instagram Login flow (graph.instagram.com), NOT Facebook Login.
 
 import { NextResponse, type NextRequest } from 'next/server';
 import {
-  exchangeCodeForToken,
-  exchangeForLongLivedUserToken,
-  listManagedPages,
-  getInstagramAccount,
-  subscribePageToWebhooks,
+  exchangeCodeForShortToken,
+  exchangeForLongLivedToken,
+  getInstagramUser,
+  subscribeIgWebhooks,
 } from '@/lib/meta';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { ENV } from '@/lib/env';
@@ -30,25 +28,19 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // 1. short-lived user token
-    const { access_token: shortToken } = await exchangeCodeForToken(code);
+    // 1. short-lived token + IG user_id
+    const { access_token: shortToken } = await exchangeCodeForShortToken(code);
     // 2. long-lived (60 days)
-    const { access_token: userToken, expires_in } = await exchangeForLongLivedUserToken(shortToken);
+    const { access_token: longToken, expires_in } = await exchangeForLongLivedToken(shortToken);
+    // 3. fetch user info
+    const ig = await getInstagramUser(longToken);
 
-    // 3. list pages, pick the first that has an Instagram business account
-    const pages = await listManagedPages(userToken);
-    const pageWithIG = pages.find((p) => p.instagram_business_account);
-    if (!pageWithIG) {
-      return back('meta_error=no_ig_account');
-    }
-    const ig = await getInstagramAccount(pageWithIG.id, pageWithIG.access_token);
-    if (!ig) return back('meta_error=ig_lookup_failed');
-
-    // 4. subscribe webhooks
+    // 4. subscribe webhooks (non-fatal)
+    let webhookOk = false;
     try {
-      await subscribePageToWebhooks(pageWithIG.id, pageWithIG.access_token);
+      await subscribeIgWebhooks(ig.user_id, longToken);
+      webhookOk = true;
     } catch (e) {
-      // Non-fatal — surface to user, they can retry from settings
       console.error('webhook subscribe failed', e);
     }
 
@@ -60,20 +52,22 @@ export async function GET(req: NextRequest) {
         {
           org_id: orgId,
           platform: 'instagram',
-          ig_user_id: ig.id,
-          page_id: pageWithIG.id,
-          page_name: pageWithIG.name,
+          ig_user_id: ig.user_id,
+          page_id: null,
+          page_name: null,
           username: ig.username,
-          access_token: pageWithIG.access_token, // page token; long-lived
+          access_token: longToken,
           token_expires_at: expires_in ? new Date(Date.now() + expires_in * 1000).toISOString() : null,
-          scopes: [
-            'instagram_basic', 'instagram_manage_messages', 'pages_messaging',
-            'pages_show_list', 'pages_manage_metadata', 'business_management',
-          ],
+          scopes: ['instagram_business_basic', 'instagram_business_manage_messages'],
           status: 'active',
-          webhook_subscribed: true,
+          webhook_subscribed: webhookOk,
           last_synced_at: new Date().toISOString(),
-          meta: { ig_followers_count: ig.followers_count ?? null, ig_picture_url: ig.profile_picture_url ?? null },
+          meta: {
+            account_type: ig.account_type ?? null,
+            ig_followers_count: ig.followers_count ?? null,
+            ig_picture_url: ig.profile_picture_url ?? null,
+            display_name: ig.name ?? null,
+          },
         },
         { onConflict: 'org_id,ig_user_id' },
       );
@@ -82,7 +76,6 @@ export async function GET(req: NextRequest) {
       return back(`meta_error=${encodeURIComponent(upsertErr.message)}`);
     }
 
-    // Update org's followers count for the sidebar
     if (ig.followers_count) {
       await admin.from('organizations').update({ followers_count: ig.followers_count }).eq('id', orgId);
     }
