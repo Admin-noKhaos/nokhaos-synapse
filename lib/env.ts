@@ -1,7 +1,14 @@
-// Env validation. Throws clearly if a required var is missing at startup.
-// Server-only — never imported from client components.
+// Env validation. Tolerant at boot — required keys are *checked at use time*
+// (e.g. anthropicConfigured(), serviceRoleConfigured()) so missing optional
+// integrations don't crash the whole app.
 
 import { z } from 'zod';
+
+const optStr = z
+  .preprocess((v) => (typeof v === 'string' && v === '' ? undefined : v), z.string().optional());
+
+const optUrl = z
+  .preprocess((v) => (typeof v === 'string' && v === '' ? undefined : v), z.string().url().optional());
 
 const PublicSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
@@ -10,18 +17,18 @@ const PublicSchema = z.object({
 });
 
 const ServerSchema = z.object({
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
-  SUPABASE_PROJECT_ID: z.string().min(1).optional(),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  SUPABASE_SERVICE_ROLE_KEY: optStr,
+  SUPABASE_PROJECT_ID: optStr,
+  ANTHROPIC_API_KEY: optStr,
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
-  META_APP_ID: z.string().optional(),
-  META_APP_SECRET: z.string().optional(),
-  META_VERIFY_TOKEN: z.string().optional(),
+  META_APP_ID: optStr,
+  META_APP_SECRET: optStr,
+  META_VERIFY_TOKEN: optStr,
   META_GRAPH_VERSION: z.string().default('v21.0'),
   CREDIT_MARKUP: z.coerce.number().default(2.0),
   SIGNUP_FREE_CREDITS_USD: z.coerce.number().default(5),
-  WORKER_INTERNAL_TOKEN: z.string().optional(),
-  WORKER_URL: z.string().url().optional(),
+  WORKER_INTERNAL_TOKEN: optStr,
+  WORKER_URL: optUrl,
 });
 
 export const PUBLIC_ENV = PublicSchema.parse({

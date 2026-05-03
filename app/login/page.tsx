@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { LoginForm } from './LoginForm';
 
 export default function LoginPage() {
@@ -55,7 +56,9 @@ export default function LoginPage() {
         <h1 className="auth-h1">Welcome back</h1>
         <p className="auth-sub">Sign in to your noKhaos workspace.</p>
 
-        <LoginForm />
+        <Suspense fallback={null}>
+          <LoginForm />
+        </Suspense>
 
         <div className="auth-foot">
           New here? <a href="/signup">Create an account</a>
