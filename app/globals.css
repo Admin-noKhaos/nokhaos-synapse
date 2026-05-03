@@ -1,0 +1,251 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Apple SF Pro stack with Inter fallback for non-Apple viewers. */
+@layer base {
+  :root {
+    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+                 'Inter', system-ui, sans-serif;
+    --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+
+    --bg:        #000000;
+    --surface-0: #0a0a0c;
+    --surface-1: #111114;
+    --surface-2: #17171b;
+    --surface-3: #1d1d22;
+
+    --hairline:        rgba(255,255,255,0.08);
+    --hairline-strong: rgba(255,255,255,0.14);
+
+    --text:   rgba(255,255,255,0.96);
+    --text-2: rgba(235,235,245,0.62);
+    --text-3: rgba(235,235,245,0.36);
+    --text-4: rgba(235,235,245,0.18);
+
+    --accent-1:    #34E08A;
+    --accent-2:    #00C26B;
+    --accent-deep: #0A6E4A;
+    --accent-glow: 52, 224, 138;
+
+    --grad-accent: linear-gradient(135deg, #4DFF9E 0%, #00C26B 55%, #00875A 100%);
+    --grad-accent-soft: linear-gradient(135deg, rgba(77,255,158,.18) 0%, rgba(0,194,107,.10) 100%);
+
+    --warn: #FF9F0A;
+    --crit: #FF453A;
+    --info: #0A84FF;
+
+    --r-sm:  6px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --r-xl: 20px;
+
+    --shadow-1: 0 1px 0 rgba(255,255,255,0.04) inset, 0 1px 2px rgba(0,0,0,0.4);
+    --shadow-2: 0 1px 0 rgba(255,255,255,0.05) inset, 0 8px 28px rgba(0,0,0,0.5);
+
+    --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection { background: rgba(var(--accent-glow), 0.35); color: #fff; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.1);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.2);
+    background-clip: content-box;
+  }
+}
+
+/* Ambient gradient: two soft green pools, like an Apple wallpaper. */
+.ambient {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(60vw 60vw at 12% 8%, rgba(0, 194, 107, 0.10), transparent 60%),
+    radial-gradient(50vw 50vw at 90% 92%, rgba(77, 255, 158, 0.06), transparent 60%);
+}
+
+/* === Card === */
+.sx-card {
+  background: var(--surface-1);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  position: relative;
+  overflow: hidden;
+}
+.sx-card.glass {
+  background: rgba(20, 20, 24, 0.55);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border-color: rgba(255,255,255,0.10);
+}
+.sx-card-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px 0; gap: 12px;
+}
+.sx-card-hd h3 {
+  margin: 0; font-size: 13px; font-weight: 600;
+  letter-spacing: -0.005em; color: var(--text);
+}
+.sx-card-hd .sub { color: var(--text-3); font-size: 11.5px; font-weight: 400; }
+.sx-card-bd { padding: 12px 16px 16px; }
+
+/* === Pill / Tag === */
+.sx-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 0.5px solid var(--hairline);
+  color: var(--text-2);
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.sx-pill.hot   { background: rgba(255, 69, 58, 0.14); border-color: rgba(255, 69, 58, 0.30); color: #FF6E63; }
+.sx-pill.warm  { background: rgba(255, 159, 10, 0.14); border-color: rgba(255, 159, 10, 0.30); color: #FFB340; }
+.sx-pill.cold  { background: rgba(10, 132, 255, 0.14); border-color: rgba(10, 132, 255, 0.30); color: #5AB0FF; }
+.sx-pill.green { background: rgba(52, 224, 138, 0.14); border-color: rgba(52, 224, 138, 0.30); color: #5DEFA5; }
+.sx-pill.dot::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 8px currentColor;
+}
+
+/* === Button === */
+.sx-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 12px;
+  border-radius: 8px;
+  border: 0.5px solid var(--hairline);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font-size: 12px; font-weight: 500;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition: background 120ms var(--ease), transform 120ms var(--ease);
+  text-decoration: none;
+}
+.sx-btn:hover { background: rgba(255,255,255,0.08); }
+.sx-btn:active { transform: scale(0.98); }
+.sx-btn.primary {
+  background: var(--grad-accent);
+  color: #003318;
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.30) inset, 0 4px 14px rgba(0,194,107,0.28);
+}
+.sx-btn.primary:hover { filter: brightness(1.06); }
+.sx-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.sx-btn.ghost:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.sx-btn.icon { padding: 0; width: 28px; justify-content: center; }
+.sx-btn.sm { height: 24px; padding: 0 9px; font-size: 11.5px; }
+.sx-btn.lg { height: 36px; padding: 0 16px; font-size: 13px; }
+
+/* === KPI === */
+.sx-kpi-label {
+  color: var(--text-3);
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.sx-kpi-value {
+  font-size: 28px; font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+  font-feature-settings: 'tnum' 1, 'ss01' 1;
+}
+.sx-kpi-value .unit { font-size: 18px; font-weight: 500; color: var(--text-3); margin-left: 2px; }
+.sx-kpi-delta {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11.5px; font-weight: 500;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.sx-kpi-delta.up { color: #5DEFA5; }
+.sx-kpi-delta.down { color: #FF6E63; }
+.sx-kpi-delta.flat { color: var(--text-3); }
+
+/* === Avatar === */
+.sx-avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+  color: #fff;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #2c2c30, #1a1a1d);
+  border: 0.5px solid var(--hairline);
+  position: relative;
+}
+.sx-avatar.online::after {
+  content: ''; position: absolute; bottom: -1px; right: -1px;
+  width: 10px; height: 10px;
+  background: var(--accent-1);
+  border-radius: 50%;
+  border: 2px solid var(--surface-0);
+}
+
+/* === Misc === */
+.sx-divider { height: 0.5px; background: var(--hairline); margin: 12px 0; }
+.sx-vdivider { width: 0.5px; background: var(--hairline); align-self: stretch; }
+
+.sx-section-title {
+  font-size: 11px; font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.sx-page-h1 {
+  font-size: 28px; font-weight: 600; letter-spacing: -0.025em;
+  margin: 0 0 4px; color: var(--text);
+}
+.sx-page-sub { color: var(--text-2); font-size: 13px; margin: 0; }
+
+@keyframes sx-pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+@keyframes sx-pulse-ring {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+@keyframes sx-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sx-fade-in { animation: sx-fade-in 320ms var(--ease) both; }
+
+.sx-input {
+  height: 30px; padding: 0 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--hairline);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+  width: 100%;
+  transition: border-color 120ms var(--ease), background 120ms var(--ease);
+  font-family: inherit;
+}
+.sx-input:focus { border-color: rgba(52, 224, 138, 0.5); background: var(--surface-1); }
+.sx-input::placeholder { color: var(--text-3); }
