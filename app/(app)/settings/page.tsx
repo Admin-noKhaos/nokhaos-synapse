@@ -6,6 +6,7 @@ import { I } from '@/lib/icons';
 import { metaConfigured, anthropicConfigured, serviceRoleConfigured } from '@/lib/env';
 import { TopupForm } from './TopupForm';
 import { SignOutButton } from './SignOutButton';
+import { DisconnectButton } from './DisconnectButton';
 
 export default async function SettingsPage({
   searchParams,
@@ -97,16 +98,22 @@ export default async function SettingsPage({
               </div>
             ) : metaAccounts && metaAccounts.length ? (
               <>
-                {metaAccounts.map((a) => (
-                  <div key={a.id} className="row">
-                    <Avatar name={a.username || a.page_name || 'IG'} size={32} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>@{a.username || '—'}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{a.page_name} · webhooks {a.webhook_subscribed ? 'on' : 'off'}</div>
+                {metaAccounts.map((a) => {
+                  const accountType = (a.meta as { account_type?: string } | null)?.account_type ?? null;
+                  return (
+                    <div key={a.id} className="row">
+                      <Avatar name={a.username || a.page_name || 'IG'} size={32} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>@{a.username || '—'}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                          {accountType ?? a.page_name ?? '—'} · webhooks {a.webhook_subscribed ? 'on' : 'off'}
+                        </div>
+                      </div>
+                      <Pill tone={a.status === 'active' ? 'green' : 'warm'} dot={a.status === 'active'}>{a.status}</Pill>
+                      <DisconnectButton id={a.id} />
                     </div>
-                    <Pill tone={a.status === 'active' ? 'green' : 'warm'} dot={a.status === 'active'}>{a.status}</Pill>
-                  </div>
-                ))}
+                  );
+                })}
                 <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
                   <a href="/api/meta/oauth"><Button kind="default" size="sm" icon={<I.Plus size={13} />} type="button">Connect another</Button></a>
                 </div>
