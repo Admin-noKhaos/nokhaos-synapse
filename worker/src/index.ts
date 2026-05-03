@@ -8,9 +8,13 @@ import { processWebhookEvent } from './processWebhook.js';
 
 let processing = false;
 
+let lastTickAt = 0;
+let totalProcessed = 0;
+
 async function tick() {
   if (processing) return;
   processing = true;
+  lastTickAt = Date.now();
   try {
     const { data: rows, error } = await db
       .from('webhook_events')
@@ -21,14 +25,18 @@ async function tick() {
       .limit(20);
 
     if (error) {
-      console.error('poll error', error);
+      console.error('[poll] query error', error.message);
       return;
+    }
+    if (rows && rows.length > 0) {
+      console.log(`[poll] found ${rows.length} unprocessed events`);
     }
     for (const row of rows ?? []) {
       try {
         await processWebhookEvent({ id: row.id, payload: row.payload as never });
+        totalProcessed++;
       } catch (e) {
-        console.error('processWebhookEvent threw', e);
+        console.error('[poll] processWebhookEvent threw', e);
       }
     }
   } finally {
@@ -42,7 +50,12 @@ tick();
 createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, ts: new Date().toISOString() }));
+    res.end(JSON.stringify({
+      ok: true,
+      ts: new Date().toISOString(),
+      last_tick_ms_ago: lastTickAt ? Date.now() - lastTickAt : null,
+      total_processed: totalProcessed,
+    }));
     return;
   }
   res.writeHead(404);
