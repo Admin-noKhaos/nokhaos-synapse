@@ -21,10 +21,13 @@
 import 'server-only';
 import { ENV, metaConfigured } from '@/lib/env';
 
+// Scope names changed when Meta moved Instagram to the "Use Cases" system.
+// The legacy `instagram_basic` / `instagram_manage_messages` are rejected for
+// apps that enabled the new "Manage messaging on Instagram" use case.
+// New names use the `instagram_business_*` prefix.
 const REQUIRED_SCOPES = [
-  'instagram_basic',
-  'instagram_manage_messages',
-  'pages_messaging',
+  'instagram_business_basic',
+  'instagram_business_manage_messages',
   'pages_show_list',
   'pages_manage_metadata',
   'business_management',
