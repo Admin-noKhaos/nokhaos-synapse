@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
 const PUBLIC_PATHS = ['/login', '/signup', '/auth/callback', '/api/meta/webhook', '/api/meta/oauth/callback', '/api/meta/deauth', '/l', '/api/health', '/privacy', '/terms', '/data-deletion'];
+// note: /api/dev/simulate-dm requires auth (uses session); intentionally NOT public.
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next({ request: req });

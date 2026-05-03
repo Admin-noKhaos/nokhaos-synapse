@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { I } from '@/lib/icons';
 import { Card, CardBody, Button } from '@/lib/primitives';
+import { SimulatorButton } from './SimulatorButton';
 
 export function InboxEmpty({ hasMeta }: { hasMeta: boolean }) {
   return (
@@ -62,9 +63,16 @@ export function InboxEmpty({ hasMeta }: { hasMeta: boolean }) {
             </div>
           </div>
 
-          {!hasMeta && (
+          {!hasMeta ? (
             <div style={{ marginTop: 20 }}>
               <Link href="/settings"><Button kind="primary">Connect Instagram</Button></Link>
+            </div>
+          ) : (
+            <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <SimulatorButton />
+              <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                Test the full pipeline without waiting on a real DM.
+              </span>
             </div>
           )}
         </CardBody>
