@@ -16,9 +16,14 @@
 import 'server-only';
 import { ENV, metaConfigured } from '@/lib/env';
 
+// Full Instagram messaging + content scope set, matching the "Manage messaging on
+// Instagram" use case in the Meta App dashboard.
 const REQUIRED_SCOPES = [
   'instagram_business_basic',
   'instagram_business_manage_messages',
+  'instagram_business_manage_comments',
+  'instagram_business_content_publish',
+  'instagram_business_manage_insights',
 ];
 
 const IG_GRAPH = () => `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}`;
@@ -28,9 +33,10 @@ export function metaOAuthUrl(state: string): string {
     throw new Error('Meta App not configured. See docs/meta-app-setup.md.');
   }
   const redirectUri = `${ENV.NEXT_PUBLIC_APP_URL}/api/meta/oauth/callback`;
+  // NOTE: client_id here is the *Instagram* App ID (from "Customize use case" →
+  // Instagram API → Instagram app ID), NOT the parent Meta App ID. They differ.
   const params = new URLSearchParams({
-    enable_fb_login: '0',
-    force_authentication: '1',
+    force_reauth: 'true',
     client_id: ENV.META_APP_ID!,
     redirect_uri: redirectUri,
     response_type: 'code',
