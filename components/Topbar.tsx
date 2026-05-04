@@ -2,18 +2,27 @@
 
 import { I } from '@/lib/icons';
 import { Avatar, Button } from '@/lib/primitives';
+import { useTheme } from '@/components/ThemeProvider';
 
 export function Topbar({
   title,
   subtitle,
   userName,
   right,
+  onCmdK,
+  onBell,
+  onHelp,
 }: {
   title: string;
   subtitle?: string;
   userName?: string;
   right?: React.ReactNode;
+  onCmdK?: () => void;
+  onBell?: () => void;
+  onHelp?: () => void;
 }) {
+  const { prefs, toggleMode } = useTheme();
+
   return (
     <header className="sx-topbar">
       <style>{`
@@ -28,6 +37,7 @@ export function Topbar({
           flex-shrink: 0;
           position: sticky; top: 0; z-index: 20;
         }
+        html[data-theme='light'] .sx-topbar { background: rgba(248,248,250,0.78); }
         .sx-topbar-title { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
         .sx-topbar-sub   { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
         .sx-search {
@@ -39,18 +49,13 @@ export function Topbar({
           color: var(--text-2);
           font-size: 12.5px;
           width: 320px; max-width: 40vw;
-          cursor: text;
+          cursor: pointer;
+          font-family: inherit; text-align: left;
         }
-        .sx-search:focus-within {
-          border-color: rgba(52,224,138,0.4);
-          background: rgba(255,255,255,0.06);
-        }
-        .sx-search input {
-          background: transparent; border: 0; outline: none;
-          color: var(--text); font-size: 12.5px; flex: 1;
-          font-family: inherit;
-        }
-        .sx-search input::placeholder { color: var(--text-3); }
+        html[data-theme='light'] .sx-search { background: rgba(0,0,0,0.04); }
+        .sx-search:hover { background: rgba(255,255,255,0.06); }
+        html[data-theme='light'] .sx-search:hover { background: rgba(0,0,0,0.06); }
+        .sx-search > .label { flex: 1; color: var(--text-3); }
         .sx-search-kbd {
           font-family: var(--font-mono); font-size: 10.5px;
           color: var(--text-3);
@@ -59,6 +64,7 @@ export function Topbar({
           border-radius: 4px;
           padding: 1px 5px;
         }
+        html[data-theme='light'] .sx-search-kbd { background: rgba(0,0,0,0.06); color: var(--text-2); }
       `}</style>
 
       <div>
@@ -68,14 +74,17 @@ export function Topbar({
 
       <div style={{ flex: 1 }} />
 
-      <label className="sx-search">
+      <button className="sx-search" onClick={onCmdK} type="button">
         <I.Search size={14} style={{ color: 'var(--text-3)' }} />
-        <input placeholder="Search conversations, contacts, flows…" />
+        <span className="label">Search conversations, contacts, flows…</span>
         <span className="sx-search-kbd">⌘K</span>
-      </label>
+      </button>
 
       {right}
 
+      <Button kind="ghost" icon={prefs.mode === 'light' ? <I.Sun size={16} /> : <I.Moon size={16} />} onClick={toggleMode} title="Toggle theme" aria-label="Toggle theme" />
+      <Button kind="ghost" icon={<I.Help size={16} />} onClick={onHelp} title="What's new" aria-label="Help" />
+      <Button kind="ghost" icon={<I.Bell size={16} />} onClick={onBell} title="Notifications" aria-label="Notifications" />
       <Avatar name={userName || 'You'} size={28} online />
     </header>
   );

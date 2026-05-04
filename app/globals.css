@@ -23,10 +23,21 @@
     --text-3: rgba(235,235,245,0.36);
     --text-4: rgba(235,235,245,0.18);
 
-    --accent-1:    #34E08A;
-    --accent-2:    #00C26B;
-    --accent-deep: #0A6E4A;
-    --accent-glow: 52, 224, 138;
+    /* Single confident accent. The palette can be swapped via JS by setting
+       these variables; defaults are green. --accent-rgb is the raw triplet
+       so we can compose alpha values. */
+    --accent-1:     #34E08A;
+    --accent-2:     #00C26B;
+    --accent-deep:  #0A6E4A;
+    --accent-light: #5DEFA5;
+    --accent-rgb:   52, 224, 138;
+    --accent-glow:  52, 224, 138;
+
+    --accent-bg-soft:    rgba(var(--accent-rgb), 0.06);
+    --accent-bg-medium:  rgba(var(--accent-rgb), 0.10);
+    --accent-bg-strong:  rgba(var(--accent-rgb), 0.18);
+    --accent-border:     rgba(var(--accent-rgb), 0.22);
+    --accent-border-2:   rgba(var(--accent-rgb), 0.30);
 
     --grad-accent: linear-gradient(135deg, #4DFF9E 0%, #00C26B 55%, #00875A 100%);
     --grad-accent-soft: linear-gradient(135deg, rgba(77,255,158,.18) 0%, rgba(0,194,107,.10) 100%);
@@ -247,5 +258,33 @@
   transition: border-color 120ms var(--ease), background 120ms var(--ease);
   font-family: inherit;
 }
-.sx-input:focus { border-color: rgba(52, 224, 138, 0.5); background: var(--surface-1); }
+.sx-input:focus { border-color: rgba(var(--accent-rgb), 0.5); background: var(--surface-1); }
 .sx-input::placeholder { color: var(--text-3); }
+
+/* ─── LIGHT MODE — applied by setting [data-theme="light"] on <html> ─── */
+html[data-theme='light'] {
+  --bg:        #F2F2F5;
+  --surface-0: #F8F8FA;
+  --surface-1: #FFFFFF;
+  --surface-2: #F2F2F5;
+  --surface-3: #E8E8ED;
+  --hairline:        rgba(0,0,0,0.10);
+  --hairline-strong: rgba(0,0,0,0.18);
+  --text:   rgba(0,0,0,0.92);
+  --text-2: rgba(60,60,67,0.66);
+  --text-3: rgba(60,60,67,0.42);
+  --text-4: rgba(60,60,67,0.22);
+  --shadow-1: 0 1px 0 rgba(0,0,0,0.04) inset, 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-2: 0 1px 0 rgba(255,255,255,0.6) inset, 0 8px 28px rgba(0,0,0,0.10);
+}
+html[data-theme='light'] body { background: var(--bg); color: var(--text); }
+html[data-theme='light'] .sx-card { background: var(--surface-1); border-color: var(--hairline); }
+html[data-theme='light'] .sx-pill { background: rgba(0,0,0,0.04); border-color: var(--hairline); color: var(--text-2); }
+html[data-theme='light'] .sx-pill.green { background: rgba(0,160,90,0.10); border-color: rgba(0,160,90,0.25); color: #008055; }
+html[data-theme='light'] .sx-btn { background: rgba(0,0,0,0.04); border-color: var(--hairline); color: var(--text); }
+html[data-theme='light'] .sx-btn:hover { background: rgba(0,0,0,0.07); }
+html[data-theme='light'] .sx-btn.ghost { background: transparent; }
+html[data-theme='light'] .sx-btn.ghost:hover { background: rgba(0,0,0,0.05); color: var(--text); }
+html[data-theme='light'] .sx-input { background: rgba(0,0,0,0.03); }
+html[data-theme='light'] .ambient { mix-blend-mode: multiply; opacity: 0.6; }
+

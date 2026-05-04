@@ -194,7 +194,9 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
   const goal = (node.config.goal as string | undefined) ?? 'Reply concisely with a single clear next step.';
   const voice = (node.config.voice as string | undefined) ?? 'warm, direct';
   const extra = (node.config.system_prompt as string | undefined) ?? '';
-  const brainBlock = ctx.brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${ctx.brainMd.trim()}\n` : '';
+  // Master doc is included by default; opt-out by setting use_master_doc:false on the node
+  const useMasterDoc = node.config.use_master_doc !== false;
+  const brainBlock = useMasterDoc && ctx.brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${ctx.brainMd.trim()}\n` : '';
 
   const r = await workerCall({
     orgId: ctx.orgId,

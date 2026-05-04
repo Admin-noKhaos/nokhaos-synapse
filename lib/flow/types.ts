@@ -52,6 +52,8 @@ export type AiConfig = {
   goal?: string;
   /** Brand voice descriptor. */
   voice?: string;
+  /** When true (default), append the org's master doc to the system prompt. */
+  use_master_doc?: boolean;
 };
 
 export type ConditionConfig = {

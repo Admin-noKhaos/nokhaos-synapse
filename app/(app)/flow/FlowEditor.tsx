@@ -712,6 +712,22 @@ function Properties({
             <textarea className="sx-input" style={{ height: 60, paddingTop: 8 }} value={node.config.system_prompt ?? ''}
                       onChange={(e) => patch({ system_prompt: e.target.value })} />
           </Field>
+          <Field label="Master doc">
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 10px', borderRadius: 8, background: 'var(--surface-2)', border: '0.5px solid var(--hairline)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={node.config.use_master_doc !== false}
+                onChange={(e) => patch({ use_master_doc: e.target.checked })}
+                style={{ marginTop: 2 }}
+              />
+              <span style={{ fontSize: 12, lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 600 }}>Include master doc</span>
+                <span style={{ display: 'block', color: 'var(--text-3)', fontSize: 11, marginTop: 2 }}>
+                  Your full brand context (voice, products, FAQs, do&apos;s &amp; don&apos;ts) injected into this reply&apos;s system prompt. Recommended.
+                </span>
+              </span>
+            </label>
+          </Field>
         </>
       )}
 
