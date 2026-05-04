@@ -4,6 +4,22 @@
 import 'server-only';
 import { z } from 'zod';
 import { meteredCall } from '@/lib/anthropic';
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
+
+/** Fetch the org's master doc (brain_md). Empty string if none set. */
+async function getOrgBrain(orgId: string): Promise<string> {
+  try {
+    const admin = getSupabaseAdmin();
+    const { data } = await admin
+      .from('organizations')
+      .select('brain_md')
+      .eq('id', orgId)
+      .single();
+    return (data?.brain_md as string | undefined) ?? '';
+  } catch {
+    return '';
+  }
+}
 
 const SYSTEM_BASE = `You are Synapse, an AI agent that handles Instagram DMs for small businesses to convert leads into customers.
 You think like a thoughtful sales-engineer who genuinely cares about the customer outcome.
@@ -34,6 +50,9 @@ export async function classifyDM(args: {
     .map((m) => `${m.from === 'them' ? 'CUSTOMER' : 'BRAND'}: ${m.text}`)
     .join('\n');
 
+  const brain = await getOrgBrain(args.orgId);
+  const brainBlock = brain.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${brain.trim()}\n` : '';
+
   const { text, cost, new_balance_usd } = await meteredCall({
     orgId: args.orgId,
     purpose: 'classify',
@@ -42,7 +61,7 @@ export async function classifyDM(args: {
     system: `${SYSTEM_BASE}
 
 BRAND CONTEXT:
-${args.brandContext}
+${args.brandContext}${brainBlock}
 
 TASK: Classify the customer's intent and score them as a lead. Return JSON only with this exact shape:
 {
@@ -76,6 +95,9 @@ export async function generateReply(args: {
     .map((m) => `${m.from === 'them' ? 'CUSTOMER' : 'BRAND'}: ${m.text}`)
     .join('\n');
 
+  const brain = await getOrgBrain(args.orgId);
+  const brainBlock = brain.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${brain.trim()}\n` : '';
+
   const { text, cost, new_balance_usd } = await meteredCall({
     orgId: args.orgId,
     purpose: 'reply',
@@ -84,7 +106,7 @@ export async function generateReply(args: {
     system: `${SYSTEM_BASE}
 
 BRAND CONTEXT:
-${args.brandContext}`,
+${args.brandContext}${brainBlock}`,
     messages: [
       {
         role: 'user',

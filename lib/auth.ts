@@ -18,6 +18,7 @@ export type SessionOrg = {
   plan: string;
   followers_count: number;
   role: 'owner' | 'admin' | 'member';
+  brain_md: string;
 };
 
 export type Session = {
@@ -58,7 +59,7 @@ export async function getCurrentSession(): Promise<Session | null> {
 
   const { data: org } = await supabase
     .from('organizations')
-    .select('id, name, plan, followers_count')
+    .select('id, name, plan, followers_count, brain_md')
     .eq('id', orgId)
     .single();
   if (!org) return null;
@@ -90,6 +91,7 @@ export async function getCurrentSession(): Promise<Session | null> {
       plan: org.plan,
       followers_count: org.followers_count,
       role: (membership?.role as Session['org']['role']) ?? 'member',
+      brain_md: org.brain_md ?? '',
     },
     balance_usd: Number(balance?.balance_usd ?? 0),
   };

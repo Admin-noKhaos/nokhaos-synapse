@@ -33,6 +33,8 @@ type RunContext = {
   leadIgUserId: string;
   messageText: string;
   transcript: string;
+  /** Org's master doc — appended to every AI system prompt. */
+  brainMd: string;
 
   // Filled by AI/condition nodes
   intent?: string;
@@ -42,7 +44,7 @@ type RunContext = {
   generatedReply?: string;
 };
 
-export async function runAutomationForMessage(input: Omit<RunContext, 'intent' | 'sentiment' | 'leadScore' | 'generatedReply' | 'intentConfidence'>) {
+export async function runAutomationForMessage(input: Omit<RunContext, 'intent' | 'sentiment' | 'leadScore' | 'generatedReply' | 'intentConfidence'> & { brainMd?: string }) {
   // Pull all live automations for the org. We run *all* of them in series.
   const { data: automations, error } = await db
     .from('automations')
@@ -55,11 +57,12 @@ export async function runAutomationForMessage(input: Omit<RunContext, 'intent' |
   }
   if (!automations || automations.length === 0) return;
 
+  const brainMd = input.brainMd ?? '';
   for (const a of automations) {
     const graph = (a.graph as FlowGraph) ?? { nodes: [], edges: [] };
     if (!graph.nodes?.length) continue;
     try {
-      await runGraph(graph, { ...input } as RunContext, a.id, a.name);
+      await runGraph(graph, { ...input, brainMd } as RunContext, a.id, a.name);
     } catch (e) {
       console.error(`automation ${a.id} (${a.name}) failed`, e);
     }
@@ -157,6 +160,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
 async function aiClassify(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
   const classes = (node.config.classes as string[] | undefined) ?? ['purchase', 'objection', 'question', 'spam'];
   const minConf = (node.config.confidence as number | undefined) ?? 0.7;
+  const brainBlock = ctx.brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${ctx.brainMd.trim()}\n` : '';
 
   const r = await workerCall({
     orgId: ctx.orgId,
@@ -165,7 +169,7 @@ async function aiClassify(node: FlowNode, ctx: RunContext): Promise<{ proceed: b
     cacheSystem: true,
     system:
       `Classify Instagram DM intent for @${ctx.accountUsername ?? 'brand'}. ` +
-      `Return STRICT JSON: {"intent":<one of: ${classes.join(' | ')} | other>,"confidence":0-1,"sentiment":"hot"|"warm"|"cold","lead_score":0-100}. No markdown, no prose.`,
+      `Return STRICT JSON: {"intent":<one of: ${classes.join(' | ')} | other>,"confidence":0-1,"sentiment":"hot"|"warm"|"cold","lead_score":0-100}. No markdown, no prose.${brainBlock}`,
     userMessage: ctx.transcript,
     maxTokens: 150,
     temperature: 0.1,
@@ -190,6 +194,7 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
   const goal = (node.config.goal as string | undefined) ?? 'Reply concisely with a single clear next step.';
   const voice = (node.config.voice as string | undefined) ?? 'warm, direct';
   const extra = (node.config.system_prompt as string | undefined) ?? '';
+  const brainBlock = ctx.brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${ctx.brainMd.trim()}\n` : '';
 
   const r = await workerCall({
     orgId: ctx.orgId,
@@ -199,7 +204,8 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
     system:
       `You are Synapse, replying as @${ctx.accountUsername ?? 'brand'} on Instagram. ` +
       `Voice: ${voice}. Goal: ${goal}. Output ONLY the reply text, 1-3 sentences max, no quotes, no markdown. ` +
-      (extra ? `\n${extra}` : ''),
+      (extra ? `\n${extra}` : '') +
+      brainBlock,
     userMessage: `Recent conversation:\n${ctx.transcript}\n\nWrite the next reply as the brand:`,
     maxTokens: 200,
     temperature: 0.7,

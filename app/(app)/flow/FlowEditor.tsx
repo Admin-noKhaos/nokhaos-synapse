@@ -312,7 +312,7 @@ function Topbar({
         }}
       />
       <Pill tone={status === 'live' ? 'green' : status === 'paused' ? 'cold' : undefined} dot={status === 'live'}>{status}</Pill>
-      {pendingEdge && <Pill tone="warm">click target node to connect</Pill>}
+      {pendingEdge && <Pill tone="warm">drop on a node to connect · esc to cancel</Pill>}
       {error && <span style={{ fontSize: 11, color: '#FF6E63' }}>{error}</span>}
       <div style={{ flex: 1 }} />
       <Button kind="default" size="sm" disabled={saving || !dirty} onClick={onSave}>
@@ -345,8 +345,11 @@ function Canvas({
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
+  // Live cursor position (in canvas coords) while drag-connecting; used to draw
+  // the temporary preview line from the source port to the cursor.
+  const [edgeDragXY, setEdgeDragXY] = useState<{ x: number; y: number } | null>(null);
 
-  function onPointerDown(e: React.PointerEvent, id: string) {
+  function onNodePointerDown(e: React.PointerEvent, id: string) {
     if (e.button !== 0) return;
     const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -354,14 +357,14 @@ function Canvas({
     dragRef.current = { id, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
     onSelect(id);
   }
-  function onPointerMove(e: React.PointerEvent) {
+  function onNodePointerMove(e: React.PointerEvent) {
     if (!dragRef.current || !ref.current) return;
     const canvasRect = ref.current.getBoundingClientRect();
     const x = e.clientX - canvasRect.left + ref.current.scrollLeft - dragRef.current.offsetX;
     const y = e.clientY - canvasRect.top + ref.current.scrollTop - dragRef.current.offsetY;
     onMove(dragRef.current.id, { x: Math.max(0, x), y: Math.max(0, y) });
   }
-  function onPointerUp(e: React.PointerEvent) {
+  function onNodePointerUp(e: React.PointerEvent) {
     const target = e.currentTarget as HTMLElement;
     if (target.hasPointerCapture(e.pointerId)) target.releasePointerCapture(e.pointerId);
     dragRef.current = null;
@@ -375,6 +378,61 @@ function Canvas({
     }
     onSelect(id);
   }
+
+  // ── Drag-to-connect: pointerdown on the port, drag onto another node, release.
+  function onPortPointerDown(e: React.PointerEvent, sourceId: string) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (e.button !== 0) return;
+    onStartEdge(sourceId);
+    // Track cursor in canvas coords
+    if (ref.current) {
+      const r = ref.current.getBoundingClientRect();
+      setEdgeDragXY({
+        x: e.clientX - r.left + ref.current.scrollLeft,
+        y: e.clientY - r.top + ref.current.scrollTop,
+      });
+    }
+    // Capture pointer to keep events flowing during the drag, even off-port.
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function onPortPointerMove(e: React.PointerEvent) {
+    if (!pendingEdgeFrom || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    setEdgeDragXY({
+      x: e.clientX - r.left + ref.current.scrollLeft,
+      y: e.clientY - r.top + ref.current.scrollTop,
+    });
+  }
+  function onPortPointerUp(e: React.PointerEvent) {
+    if (!pendingEdgeFrom) return;
+    // Find a node under the release point.
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    let target: HTMLElement | null = el;
+    while (target && !target.dataset.nodeId) target = target.parentElement;
+    if (target?.dataset.nodeId && target.dataset.nodeId !== pendingEdgeFrom) {
+      onCompleteEdge(target.dataset.nodeId);
+    } else {
+      onStartEdge(pendingEdgeFrom); // toggle off (clears pendingEdgeFrom)
+    }
+    setEdgeDragXY(null);
+    if ((e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    }
+  }
+
+  // Escape key cancels a pending edge drag.
+  useEffect(() => {
+    if (!pendingEdgeFrom) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        onStartEdge(pendingEdgeFrom);
+        setEdgeDragXY(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pendingEdgeFrom, onStartEdge]);
 
   // Compute canvas bounds from node positions
   const maxX = Math.max(1200, ...graph.nodes.map((n) => n.position.x + NODE_W + 80));
@@ -427,6 +485,20 @@ function Canvas({
               </g>
             );
           })}
+          {/* In-progress edge preview while dragging from a port */}
+          {pendingEdgeFrom && edgeDragXY && (() => {
+            const src = graph.nodes.find((n) => n.id === pendingEdgeFrom);
+            if (!src) return null;
+            const x1 = src.position.x + NODE_W;
+            const y1 = src.position.y + 30;
+            const x2 = edgeDragXY.x;
+            const y2 = edgeDragXY.y;
+            const cx = (x1 + x2) / 2;
+            const path = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`;
+            return (
+              <path d={path} fill="none" stroke="rgba(255,159,10,0.8)" strokeWidth="2" strokeDasharray="4 4" />
+            );
+          })()}
         </svg>
 
         {/* Nodes */}
@@ -437,9 +509,10 @@ function Canvas({
           return (
             <div
               key={n.id}
-              onPointerDown={(e) => onPointerDown(e, n.id)}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
+              data-node-id={n.id}
+              onPointerDown={(e) => onNodePointerDown(e, n.id)}
+              onPointerMove={onNodePointerMove}
+              onPointerUp={onNodePointerUp}
               onClick={(e) => clickNode(e, n.id)}
               style={{
                 position: 'absolute',
@@ -482,18 +555,36 @@ function Canvas({
               <div style={{ fontSize: 12.5, fontWeight: 600 }}>{n.label}</div>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>{summarize(n)}</div>
 
-              {/* Connect-out port */}
-              <button
-                onClick={(e) => { e.stopPropagation(); onStartEdge(n.id); }}
-                title="Drag to connect"
+              {/* Connect-out port — drag onto another node to wire them */}
+              <div
+                role="button"
+                aria-label="Drag to connect"
+                title="Drag to another node to connect"
+                onPointerDown={(e) => onPortPointerDown(e, n.id)}
+                onPointerMove={onPortPointerMove}
+                onPointerUp={onPortPointerUp}
+                onClick={(e) => e.stopPropagation()}
                 style={{
-                  position: 'absolute', right: -7, top: '50%', transform: 'translateY(-50%)',
-                  width: 14, height: 14, borderRadius: 7,
-                  background: isPendingFrom ? '#FFB340' : 'var(--surface-3)',
-                  border: '1.5px solid ' + (isPendingFrom ? '#FFB340' : 'rgba(52,224,138,0.6)'),
-                  cursor: 'pointer', padding: 0, zIndex: 3,
+                  position: 'absolute', right: -14, top: '50%', transform: 'translateY(-50%)',
+                  width: 28, height: 28, borderRadius: '50%',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: pendingEdgeFrom ? 'crosshair' : 'pointer',
+                  zIndex: 4,
+                  touchAction: 'none',
                 }}
-              />
+              >
+                <div
+                  style={{
+                    width: isPendingFrom ? 18 : 14,
+                    height: isPendingFrom ? 18 : 14,
+                    borderRadius: '50%',
+                    background: isPendingFrom ? '#FFB340' : 'rgba(52,224,138,0.18)',
+                    border: '2px solid ' + (isPendingFrom ? '#FFB340' : 'rgba(52,224,138,0.7)'),
+                    transition: 'all 120ms var(--ease)',
+                    boxShadow: isPendingFrom ? '0 0 12px rgba(255,159,10,0.6)' : 'none',
+                  }}
+                />
+              </div>
             </div>
           );
         })}

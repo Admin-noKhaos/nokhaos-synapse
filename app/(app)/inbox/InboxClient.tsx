@@ -320,7 +320,6 @@ export function InboxClient({
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); }}
             />
-            <Button kind="ghost" size="sm" icon={<I.Image size={14} />} />
             <Button kind="primary" size="sm" icon={<I.Send size={13} />} disabled={!draft.trim() || sending} onClick={send}>
               {sending ? 'Sending…' : 'Send'}
             </Button>

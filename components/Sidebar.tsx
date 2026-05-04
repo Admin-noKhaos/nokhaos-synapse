@@ -15,14 +15,16 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: '/dashboard', label: 'Neural',       icon: <I.Sparkle size={17} /> },
   { href: '/flow',      label: 'Flow Builder', icon: <I.Branch  size={17} /> },
-  { href: '/inbox',     label: 'Inbox',        icon: <I.Inbox   size={17} />, badge: 4 },
+  { href: '/inbox',     label: 'Inbox',        icon: <I.Inbox   size={17} /> },
   { href: '/analytics', label: 'Analytics',    icon: <I.Chart   size={17} /> },
 ];
 
 const SECONDARY: NavItem[] = [
-  { href: '/audiences', label: 'Audiences',   icon: <I.Layers   size={17} /> },
-  { href: '/links',     label: 'Smart Links', icon: <I.Link     size={17} /> },
-  { href: '/settings',  label: 'Settings',    icon: <I.Settings size={17} /> },
+  { href: '/brain',      label: 'Master doc',  icon: <I.Brain    size={17} /> },
+  { href: '/playground', label: 'AI test',     icon: <I.Sparkle  size={17} /> },
+  { href: '/audiences',  label: 'Audiences',   icon: <I.Layers   size={17} /> },
+  { href: '/links',      label: 'Smart Links', icon: <I.Link     size={17} /> },
+  { href: '/settings',   label: 'Settings',    icon: <I.Settings size={17} /> },
 ];
 
 export function Sidebar({ orgName, plan }: { orgName: string; plan: string }) {

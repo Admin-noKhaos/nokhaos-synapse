@@ -271,6 +271,11 @@ async function handleIgMessage(ev: Normalized) {
     .map((m) => `${m.sender === 'them' ? 'CUSTOMER' : 'BRAND'}: ${m.text ?? ''}`)
     .join('\n');
 
+  // Fetch the org's master doc once and reuse for both classify + flow run.
+  const { data: orgRow } = await db.from('organizations').select('brain_md').eq('id', account.org_id).single();
+  const brainMd = (orgRow?.brain_md as string | undefined) ?? '';
+  const brainBlock = brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${brainMd.trim()}\n` : '';
+
   try {
     const classify = await workerCall({
       orgId: account.org_id,
@@ -280,7 +285,7 @@ async function handleIgMessage(ev: Normalized) {
       system:
         `You are Synapse, a sales-AI for an Instagram business (@${account.username ?? 'brand'}). ` +
         `Return STRICT JSON only with shape: {"intent":"purchase"|"objection"|"question"|"support"|"spam"|"other","sentiment":"hot"|"warm"|"cold","lead_score":0-100,"reasoning":"1 sentence"}. ` +
-        `No markdown. No prose outside JSON.`,
+        `No markdown. No prose outside JSON.${brainBlock}`,
       userMessage: `Conversation transcript:\n\n${transcript}`,
       maxTokens: 200,
       temperature: 0.2,
@@ -314,6 +319,7 @@ async function handleIgMessage(ev: Normalized) {
       leadIgUserId: senderIgId,
       messageText: ev.message.text ?? '',
       transcript,
+      brainMd,
     });
     log('automation run complete');
   } catch (e) {

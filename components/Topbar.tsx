@@ -76,7 +76,6 @@ export function Topbar({
 
       {right}
 
-      <Button kind="ghost" icon={<I.Bell size={16} />} aria-label="Notifications" />
       <Avatar name={userName || 'You'} size={28} online />
     </header>
   );

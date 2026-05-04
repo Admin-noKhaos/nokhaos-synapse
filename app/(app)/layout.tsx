@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
+import { Suspense } from 'react';
 import { Sidebar } from '@/components/Sidebar';
 import { TopbarRouter } from '@/components/TopbarRouter';
+import { NavProgress } from '@/components/NavProgress';
 import { getCurrentSession } from '@/lib/auth';
 
 export default async function AppLayout({
@@ -15,6 +17,7 @@ export default async function AppLayout({
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
+      <Suspense fallback={null}><NavProgress /></Suspense>
       <Sidebar
         orgName={org.name}
         plan={`${org.plan} · ${org.followers_count.toLocaleString()} followers`}
