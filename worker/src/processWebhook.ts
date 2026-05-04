@@ -183,6 +183,32 @@ async function handleIgMessage(ev: Normalized) {
   }
   log(`lead ${lead.id.slice(0, 8)} (@${lead.username ?? 'unknown'})`);
 
+  // Backfill username/display_name/profile_pic from IG Graph if missing.
+  // Best-effort — failures don't break the pipeline.
+  if (!lead.username && account.access_token) {
+    try {
+      const url = new URL(`https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${senderIgId}`);
+      url.searchParams.set('fields', 'username,name,profile_pic,is_verified_user');
+      url.searchParams.set('access_token', account.access_token);
+      const r = await fetch(url);
+      if (r.ok) {
+        const profile = await r.json() as { username?: string; name?: string; profile_pic?: string; is_verified_user?: boolean };
+        if (profile.username) {
+          await db.from('leads').update({
+            username: profile.username,
+            display_name: profile.name ?? profile.username,
+            profile: { profile_pic: profile.profile_pic ?? null, verified: !!profile.is_verified_user },
+          }).eq('id', lead.id);
+          log(`profile filled: @${profile.username} (${profile.name})`);
+        }
+      } else {
+        log(`profile fetch ${r.status} ${(await r.text()).slice(0, 200)}`);
+      }
+    } catch (e) {
+      log('profile fetch failed', e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // Upsert conversation
   const threadId = `${account.id}:${senderIgId}`;
   const { data: conv, error: convErr } = await db
