@@ -46,6 +46,7 @@ export function InboxClient({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const conv = conversations.find((c) => c.id === selectedId) ?? conversations[0];
   const filtered = filter === 'all'
@@ -83,6 +84,26 @@ export function InboxClient({
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setAiBusy(false);
+    }
+  }
+
+  async function resetConversation() {
+    if (!conv || resetting) return;
+    if (!window.confirm('Clear this chat history? Deletes all messages in this conversation and resets the lead — for testing, cannot be undone.')) return;
+    setResetting(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/conversations/${conv.id}/reset`, { method: 'POST' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setError(data.error || `HTTP ${r.status}`);
+        return;
+      }
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -280,6 +301,7 @@ export function InboxClient({
             <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>@{conv.lead?.username ?? '—'} · {conv.lead?.funnel_label ?? 'No funnel'}</div>
           </div>
           {conv.lead?.sentiment && <Pill tone={conv.lead.sentiment} dot>{SENTIMENT_LABEL[conv.lead.sentiment]}</Pill>}
+          <Button kind="ghost" size="sm" icon={<I.Trash size={14} />} title="Clear chat history (testing)" disabled={resetting} onClick={resetConversation} />
           <Button kind="ghost" size="sm" icon={<I.More size={14} />} />
         </div>
 
