@@ -361,6 +361,10 @@ async function handleEvent(ev: Normalized) {
   const brainMd = (orgRow?.brain_md as string | undefined) ?? '';
   const brainBlock = brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${brainMd.trim()}\n` : '';
 
+  // When the lead turns abusive we hand the conversation to a human and suppress
+  // the auto-reply (set during classify below).
+  let handoff = false;
+
   // ─── AI: classify (DM events only — comments/button taps are deterministic) ─
   if (ev.kind === 'dm' && ENV.ANTHROPIC_API_KEY) try {
     const classify = await workerCall({
@@ -370,14 +374,15 @@ async function handleEvent(ev: Normalized) {
       cacheSystem: true,
       system:
         `You are Synapse, a sales-AI for an Instagram business (@${account.username ?? 'brand'}). ` +
-        `Return STRICT JSON only with shape: {"intent":"purchase"|"objection"|"question"|"support"|"spam"|"other","sentiment":"hot"|"warm"|"cold","lead_score":0-100,"reasoning":"1 sentence"}. ` +
+        `Return STRICT JSON only with shape: {"intent":"purchase"|"objection"|"question"|"support"|"spam"|"other","sentiment":"hot"|"warm"|"cold","lead_score":0-100,"abusive":true|false,"reasoning":"1 sentence"}. ` +
+        `Set "abusive" to true ONLY when the latest customer message is insulting you, swearing at you, trolling, or clearly acting in bad faith. Skepticism, objections, or politely saying it sounds like a scam are NOT abusive. ` +
         `No markdown. No prose outside JSON.${brainBlock}`,
       userMessage: `Conversation transcript:\n\n${transcript}`,
       maxTokens: 200,
       temperature: 0.2,
     });
     const cleaned = classify.text.trim().replace(/^```(?:json)?\s*/, '').replace(/```\s*$/, '');
-    let parsed: { intent?: string; sentiment?: string; lead_score?: number; reasoning?: string } | null = null;
+    let parsed: { intent?: string; sentiment?: string; lead_score?: number; reasoning?: string; abusive?: boolean } | null = null;
     try { parsed = JSON.parse(cleaned); } catch (e) { log('classify parse failed', e); }
     if (parsed) {
       await db.from('leads').update({
@@ -386,14 +391,25 @@ async function handleEvent(ev: Normalized) {
         ai_notes: parsed.reasoning ?? null,
         tags: parsed.intent ? [`intent:${parsed.intent}`] : [],
       }).eq('id', lead.id);
-      log(`classified: intent=${parsed.intent} sentiment=${parsed.sentiment} score=${parsed.lead_score}`);
+      log(`classified: intent=${parsed.intent} sentiment=${parsed.sentiment} score=${parsed.lead_score} abusive=${parsed.abusive === true}`);
+
+      if (parsed.abusive === true) {
+        handoff = true;
+        await db.from('conversations').update({
+          status: 'handed_off',
+          next_action: 'Hostile lead — handed to a human',
+        }).eq('id', conv.id);
+        log('hostile message detected — handed off to human, suppressing auto-reply');
+      }
     }
   } catch (e) {
     log('classify failed', e instanceof Error ? e.message : String(e));
   }
 
-  // ─── Run live automations ────────────────────────────────────────────────
-  try {
+  // ─── Run live automations (skipped once handed off to a human) ─────────────
+  if (handoff) {
+    log('conversation handed off — skipping automations / auto-reply');
+  } else try {
     const { runAutomationForMessage } = await import('./runAutomation.js');
     await runAutomationForMessage({
       orgId: account.org_id,
