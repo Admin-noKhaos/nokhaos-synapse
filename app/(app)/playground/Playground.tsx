@@ -7,6 +7,9 @@ import { Button, Pill, Avatar } from '@/lib/primitives';
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 type Suggestion = { rationale: string; patch: string };
+type Scenario = 'auto_followup' | 'wait';
+
+const KEYWORD_PRESETS = ['START', 'WEBINAR', 'GUIDE'];
 
 export function Playground({ orgName, initialBrain }: { orgName: string; initialBrain: string }) {
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -17,12 +20,57 @@ export function Playground({ orgName, initialBrain }: { orgName: string; initial
   const [brain, setBrain] = useState(initialBrain);
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyToast, setApplyToast] = useState<string | null>(null);
+  const [keyword, setKeyword] = useState('START');
+  const [scenario, setScenario] = useState<Scenario | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const started = messages.length > 0;
 
   // Auto-scroll the chat to the bottom on new messages
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, busy]);
+
+  // Kick off a test from the trigger keyword. The user's first message IS the keyword
+  // (as if they commented it on a post); the agent replies with the link from the master
+  // doc, and for the 'auto_followup' scenario also sends a proactive follow-up.
+  async function startScenario(s: Scenario) {
+    if (busy) return;
+    const kw = (keyword.trim() || 'START').toUpperCase();
+    setError(null);
+    setSuggestion(null);
+    setScenario(s);
+    const opening: Msg[] = [{ role: 'user', content: kw }];
+    setMessages(opening);
+    setBusy(true);
+    try {
+      const r = await fetch('/api/ai/playground', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: opening, phase: 'opening', scenario: s }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setError(d.error === 'insufficient_credits' ? 'Out of credits — top up in Settings.' : (d.detail || d.error || `HTTP ${r.status}`));
+        setMessages([]);
+        setScenario(null);
+        return;
+      }
+      const withReply: Msg[] = [...opening, { role: 'assistant', content: d.reply }];
+      setMessages(withReply);
+      if (d.suggestion) setSuggestion(d.suggestion);
+      if (d.followup) {
+        // brief pause so the follow-up reads like a separate, second DM
+        await new Promise((res) => setTimeout(res, 650));
+        setMessages([...withReply, { role: 'assistant', content: d.followup }]);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setMessages([]);
+      setScenario(null);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function send() {
     const text = draft.trim();
@@ -85,6 +133,7 @@ export function Playground({ orgName, initialBrain }: { orgName: string; initial
     setMessages([]);
     setSuggestion(null);
     setError(null);
+    setScenario(null);
   }
 
   return (
@@ -125,6 +174,53 @@ export function Playground({ orgName, initialBrain }: { orgName: string; initial
           margin: auto; text-align: center; color: var(--text-3); font-size: 13px;
         }
         .pg-empty h3 { color: var(--text); font-size: 16px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+        .pg-start { margin: auto; width: 100%; max-width: 560px; }
+        .pg-start h3 { color: var(--text); font-size: 19px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+        .pg-start > p { color: var(--text-3); font-size: 13px; line-height: 1.55; margin: 0 0 24px; }
+        .pg-kw { margin-bottom: 22px; }
+        .pg-kw label {
+          display: block; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em;
+          text-transform: uppercase; color: var(--text-3); margin-bottom: 8px;
+        }
+        .pg-kw input {
+          width: 100%; box-sizing: border-box;
+          background: var(--surface-1); border: 0.5px solid var(--hairline);
+          border-radius: 12px; padding: 11px 14px;
+          color: var(--text); font: inherit; font-size: 14px; outline: none;
+          text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .pg-kw input:focus { border-color: rgba(0,194,107,0.5); }
+        .pg-chips { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .pg-chip {
+          background: rgba(255,255,255,0.04); border: 0.5px solid var(--hairline);
+          border-radius: 999px; padding: 5px 12px; cursor: pointer;
+          color: var(--text-2); font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em;
+          transition: all 0.15s;
+        }
+        .pg-chip:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+        .pg-chip.on {
+          background: rgba(0,194,107,0.12); border-color: rgba(0,194,107,0.5); color: #5DEFA5;
+        }
+        .pg-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .pg-card {
+          text-align: left; cursor: pointer;
+          background: var(--surface-1); border: 0.5px solid var(--hairline);
+          border-radius: 16px; padding: 16px; transition: all 0.15s;
+        }
+        .pg-card:hover:not(:disabled) {
+          border-color: rgba(0,194,107,0.45);
+          background: rgba(0,194,107,0.04);
+          transform: translateY(-1px);
+        }
+        .pg-card:disabled { opacity: 0.5; cursor: default; }
+        .pg-card-i {
+          width: 32px; height: 32px; border-radius: 9px;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--grad-accent); color: #003318; margin-bottom: 12px;
+        }
+        .pg-card-t { color: var(--text); font-size: 14px; font-weight: 600; margin-bottom: 5px; }
+        .pg-card-d { color: var(--text-3); font-size: 12px; line-height: 1.45; }
+        @media (max-width: 560px) { .pg-cards { grid-template-columns: 1fr; } }
         .pg-foot { padding: 14px 20px 16px; border-top: 0.5px solid var(--hairline); background: rgba(10,10,12,0.55); }
         .pg-input-row {
           display: flex; align-items: flex-end; gap: 8px;
@@ -189,40 +285,78 @@ export function Playground({ orgName, initialBrain }: { orgName: string; initial
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>AI test chat</div>
             <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Same agent your DMs use · grounded in your master doc</div>
           </div>
-          <Pill tone="green" dot>{messages.length} turns</Pill>
+          {started && (
+            <Pill tone="green" dot>{scenario === 'auto_followup' ? 'Agent follows up' : scenario === 'wait' ? 'Wait for reply' : `${messages.length} turns`}</Pill>
+          )}
           <Button kind="ghost" size="sm" onClick={reset} disabled={busy || !messages.length}>
             <I.X size={12} /> Reset
           </Button>
         </div>
 
         <div className="pg-bd" ref={scrollRef}>
-          {messages.length === 0 && (
-            <div className="pg-empty">
-              <h3>Talk to your agent</h3>
-              <div>Type the kind of DM a real customer would send.<br/>The AI replies grounded in your master doc — and flags missing context as you go.</div>
+          {!started && (
+            <div className="pg-start">
+              <h3>Test your DM setter</h3>
+              <p>Pick the keyword a lead would comment or DM, then choose how the agent runs the flow. It hands over the link from your master doc — then either follows up like a setter, or waits for the lead to reply.</p>
+
+              <div className="pg-kw">
+                <label>Trigger keyword</label>
+                <input
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  placeholder="START"
+                  spellCheck={false}
+                />
+                <div className="pg-chips">
+                  {KEYWORD_PRESETS.map((k) => (
+                    <button
+                      key={k}
+                      className={'pg-chip' + (keyword.trim().toUpperCase() === k ? ' on' : '')}
+                      onClick={() => setKeyword(k)}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pg-cards">
+                <button className="pg-card" disabled={busy} onClick={() => startScenario('auto_followup')}>
+                  <div className="pg-card-i"><I.Bolt size={16} /></div>
+                  <div className="pg-card-t">Agent follows up</div>
+                  <div className="pg-card-d">Sends the link, then proactively follows up to qualify and book — like a real setter.</div>
+                </button>
+                <button className="pg-card" disabled={busy} onClick={() => startScenario('wait')}>
+                  <div className="pg-card-i"><I.Reply size={16} /></div>
+                  <div className="pg-card-t">Wait for reply</div>
+                  <div className="pg-card-d">Sends the link and waits. Reply as the lead to see how the agent responds.</div>
+                </button>
+              </div>
             </div>
           )}
           {messages.map((m, i) => (
             <div key={i} className={'pg-msg ' + m.role}>{m.content}</div>
           ))}
-          {busy && <div className="pg-msg assistant" style={{ opacity: 0.6 }}>thinking…</div>}
+          {busy && started && <div className="pg-msg assistant" style={{ opacity: 0.6 }}>thinking…</div>}
         </div>
 
         <div className="pg-foot" style={{ position: 'relative' }}>
           {applyToast && <div className="toast">{applyToast}</div>}
           {error && <div className="err">{error}</div>}
-          <div className="pg-input-row">
-            <textarea
-              placeholder='e.g. "hi! is the half-marathon plan still available?"'
-              rows={1}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-            />
-            <Button kind="primary" size="sm" icon={<I.Send size={13} />} disabled={!draft.trim() || busy} onClick={send}>
-              {busy ? '…' : 'Send'}
-            </Button>
-          </div>
+          {started && (
+            <div className="pg-input-row">
+              <textarea
+                placeholder="Reply as the lead would…"
+                rows={1}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+              />
+              <Button kind="primary" size="sm" icon={<I.Send size={13} />} disabled={!draft.trim() || busy} onClick={send}>
+                {busy ? '…' : 'Send'}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 
