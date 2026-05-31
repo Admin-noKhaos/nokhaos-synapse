@@ -47,6 +47,10 @@ type RunContext = {
   /** For 'comment' events: the comment id, used to send the first reply as a
    *  private reply (recipient: { comment_id }). */
   commentId?: string;
+  /** True when this is the lead's very first interaction (no prior messages).
+   *  Lets a flow branch: first-timers get the full keyword flow, returning
+   *  leads get a normal AI reply instead of re-running it. */
+  isFirstContact: boolean;
 
   // Filled by AI/condition nodes
   intent?: string;
@@ -57,9 +61,10 @@ type RunContext = {
 };
 
 export async function runAutomationForMessage(
-  input: Omit<RunContext, 'intent' | 'sentiment' | 'leadScore' | 'generatedReply' | 'intentConfidence' | 'eventKind'> & {
+  input: Omit<RunContext, 'intent' | 'sentiment' | 'leadScore' | 'generatedReply' | 'intentConfidence' | 'eventKind' | 'isFirstContact'> & {
     brainMd?: string;
     eventKind?: EventKind;
+    isFirstContact?: boolean;
   },
 ) {
   // Pull all live automations for the org. We run *all* of them in series.
@@ -76,11 +81,12 @@ export async function runAutomationForMessage(
 
   const brainMd = input.brainMd ?? '';
   const eventKind: EventKind = input.eventKind ?? 'dm';
+  const isFirstContact = input.isFirstContact ?? false;
   for (const a of automations) {
     const graph = (a.graph as FlowGraph) ?? { nodes: [], edges: [] };
     if (!graph.nodes?.length) continue;
     try {
-      await runGraph(graph, { ...input, brainMd, eventKind } as RunContext, a.id, a.name);
+      await runGraph(graph, { ...input, brainMd, eventKind, isFirstContact } as RunContext, a.id, a.name);
     } catch (e) {
       console.error(`automation ${a.id} (${a.name}) failed`, e);
     }
@@ -191,13 +197,24 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
   return { proceed: true };
 }
 
-// Strip em/en dashes from AI output. Models reach for "—" constantly and a soft
-// "no em dashes" rule in the master doc isn't reliable, so we enforce it in code:
-// a spaced dash (" — ") becomes a comma, an inline one ("word—word") a hyphen.
-function stripEmDashes(s: string): string {
-  return s
-    .replace(/ *[—–] */g, (m) => (/ /.test(m) ? ', ' : '-'))
-    .replace(/,\s*,/g, ',');
+// Hard voice rules enforced in code (models ignore soft rules in a long doc):
+//  - em/en dash: spaced → sentence break, inline → hyphen (no commas introduced)
+//  - "bro" / "bruh" → gender-neutral term
+//  - capitalize the first letter of the message
+// Keep in sync with lib/text.ts sanitizeReply.
+const NEUTRAL_TERM = 'friend';
+function sanitizeReply(s: string): string {
+  let out = s
+    .replace(/\s*[—–]\s*/g, (m) => (/\s/.test(m) ? '. ' : '-'))
+    .replace(/\bbro\b/gi, NEUTRAL_TERM)
+    .replace(/\bbruh\b/gi, NEUTRAL_TERM)
+    .replace(/\.\s*\.\s*/g, '. ')
+    .trim();
+  const i = out.search(/[A-Za-z]/);
+  if (i >= 0 && out[i] >= 'a' && out[i] <= 'z') {
+    out = out.slice(0, i) + out[i].toUpperCase() + out.slice(i + 1);
+  }
+  return out;
 }
 
 // ─── AI nodes ────────────────────────────────────────────────────────────────
@@ -257,7 +274,7 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
     maxTokens: 200,
     temperature: 0.7,
   });
-  ctx.generatedReply = stripEmDashes(r.text.trim());
+  ctx.generatedReply = sanitizeReply(r.text.trim());
   return { proceed: true };
 }
 
@@ -277,6 +294,12 @@ async function evaluateCondition(node: FlowNode, ctx: RunContext): Promise<{ pro
   if (node.type === 'if_contains') {
     const needle = (node.config.contains as string | undefined)?.toLowerCase();
     return { proceed: !!needle && ctx.messageText.toLowerCase().includes(needle) };
+  }
+  if (node.type === 'if_first_contact') {
+    return { proceed: ctx.isFirstContact === true };
+  }
+  if (node.type === 'if_returning') {
+    return { proceed: ctx.isFirstContact === false };
   }
   if (node.type === 'else') {
     // "else" always continues — graph authors put it on a parallel branch from

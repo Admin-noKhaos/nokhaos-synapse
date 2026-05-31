@@ -5,7 +5,7 @@ export type NodeKind = 'trigger' | 'ai' | 'condition' | 'action';
 
 export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply' | 'button_click';
 export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag';
-export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'else';
+export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'if_first_contact' | 'if_returning' | 'else';
 export type ActionType = 'send_dm' | 'send_buttons' | 'send_link' | 'add_tag' | 'set_funnel' | 'handoff_human';
 
 /** A tappable button attached to a send_buttons message. Tapping it sends the
@@ -150,7 +150,7 @@ function aiLabel(t: AiType) {
   return { classify_intent: 'Classify intent', generate_reply: 'Generate reply', score_lead: 'Score lead', tag: 'Auto-tag' }[t];
 }
 function conditionLabel(t: ConditionType) {
-  return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', else: 'Else' }[t];
+  return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', if_first_contact: 'If first message', if_returning: 'If returning lead', else: 'Else' }[t];
 }
 function actionLabel(t: ActionType) {
   return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', send_link: 'Send funnel link', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];

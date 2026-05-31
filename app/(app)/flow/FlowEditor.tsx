@@ -30,6 +30,8 @@ const PALETTE = [
     { type: 'if_intent', label: 'If intent =', icon: <I.Branch size={14} />, color: '#5AB0FF' },
     { type: 'if_score_gt', label: 'If lead score >', icon: <I.Branch size={14} />, color: '#5AB0FF' },
     { type: 'if_contains', label: 'If text contains', icon: <I.Filter size={14} />, color: '#5AB0FF' },
+    { type: 'if_first_contact', label: 'If first message', icon: <I.Branch size={14} />, color: '#5AB0FF' },
+    { type: 'if_returning', label: 'If returning lead', icon: <I.Branch size={14} />, color: '#5AB0FF' },
     { type: 'else', label: 'Else', icon: <I.Branch size={14} />, color: '#5AB0FF' },
   ]},
   { kind: 'action', items: [
@@ -617,6 +619,8 @@ function summarize(n: FlowNode): string {
     if (n.type === 'if_intent') return `intent = ${n.config.intent ?? '?'}`;
     if (n.type === 'if_score_gt') return `score > ${n.config.threshold ?? '?'}`;
     if (n.type === 'if_contains') return `text contains "${n.config.contains ?? ''}"`;
+    if (n.type === 'if_first_contact') return 'lead’s first ever message';
+    if (n.type === 'if_returning') return 'lead has messaged before';
     return 'fallback';
   }
   if (n.kind === 'action') {

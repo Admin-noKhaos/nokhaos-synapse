@@ -309,6 +309,15 @@ async function handleEvent(ev: Normalized) {
   }
   log(`conversation ${conv.id.slice(0, 8)}`);
 
+  // First contact = no prior messages in this conversation (measured BEFORE we
+  // insert the current inbound). Lets flows branch first-timers vs returning leads.
+  const { count: priorMsgCount } = await db
+    .from('messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('conversation_id', conv.id);
+  const isFirstContact = (priorMsgCount ?? 0) === 0;
+  log(`first_contact=${isFirstContact} (prior messages=${priorMsgCount ?? 0})`);
+
   // Insert message (the comment text / DM text / tapped button title)
   const inboundMeta =
     ev.kind === 'comment' ? { comment: true, comment_id: ev.commentId ?? null }
@@ -400,6 +409,7 @@ async function handleEvent(ev: Normalized) {
       eventKind: ev.kind,
       postbackPayload: ev.postbackPayload,
       commentId: ev.commentId,
+      isFirstContact,
     });
     log('automation run complete');
   } catch (e) {
