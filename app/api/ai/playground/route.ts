@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { getCurrentSession } from '@/lib/auth';
 import { meteredCall, InsufficientCreditsError } from '@/lib/anthropic';
 import { anthropicConfigured } from '@/lib/env';
+import { stripEmDashes } from '@/lib/text';
 
 const Body = z.object({
   messages: z.array(z.object({
@@ -109,7 +110,7 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       // If the model didn't return valid JSON, treat the whole text as the reply.
       return NextResponse.json({
-        reply: result.text.trim(),
+        reply: stripEmDashes(result.text.trim()),
         followup: null,
         suggestion: null,
         new_balance_usd: result.new_balance_usd,
@@ -120,6 +121,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ...parsed,
+      reply: stripEmDashes(parsed.reply),
+      followup: parsed.followup ? stripEmDashes(parsed.followup) : null,
       new_balance_usd: result.new_balance_usd,
       cost_usd: result.cost.charged_usd,
     });

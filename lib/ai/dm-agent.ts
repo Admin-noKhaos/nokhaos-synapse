@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { meteredCall } from '@/lib/anthropic';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { stripEmDashes } from '@/lib/text';
 
 /** Fetch the org's master doc (brain_md). Empty string if none set. */
 async function getOrgBrain(orgId: string): Promise<string> {
@@ -121,5 +122,5 @@ ${args.brandContext}${brainBlock}`,
     max_tokens: 220,
   });
 
-  return { text: text.trim(), cost_usd: cost.charged_usd, new_balance_usd };
+  return { text: stripEmDashes(text.trim()), cost_usd: cost.charged_usd, new_balance_usd };
 }

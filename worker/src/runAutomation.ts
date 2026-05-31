@@ -191,6 +191,15 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
   return { proceed: true };
 }
 
+// Strip em/en dashes from AI output. Models reach for "—" constantly and a soft
+// "no em dashes" rule in the master doc isn't reliable, so we enforce it in code:
+// a spaced dash (" — ") becomes a comma, an inline one ("word—word") a hyphen.
+function stripEmDashes(s: string): string {
+  return s
+    .replace(/ *[—–] */g, (m) => (/ /.test(m) ? ', ' : '-'))
+    .replace(/,\s*,/g, ',');
+}
+
 // ─── AI nodes ────────────────────────────────────────────────────────────────
 
 async function aiClassify(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
@@ -248,7 +257,7 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
     maxTokens: 200,
     temperature: 0.7,
   });
-  ctx.generatedReply = r.text.trim();
+  ctx.generatedReply = stripEmDashes(r.text.trim());
   return { proceed: true };
 }
 
