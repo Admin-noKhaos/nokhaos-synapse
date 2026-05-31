@@ -252,6 +252,21 @@ async function aiClassify(node: FlowNode, ctx: RunContext): Promise<{ proceed: b
   return { proceed: true };
 }
 
+// Word-set (Jaccard) similarity, used as a backstop against the bot sending the
+// same question/message twice. URLs and punctuation are ignored.
+function normalizeForCompare(s: string): string {
+  return s.toLowerCase().replace(/https?:\/\/\S+/g, ' ').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function jaccardSimilarity(a: string, b: string): number {
+  const A = new Set(normalizeForCompare(a).split(' ').filter(Boolean));
+  const B = new Set(normalizeForCompare(b).split(' ').filter(Boolean));
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+const REPEAT_THRESHOLD = 0.6;
+
 async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
   const goal = (node.config.goal as string | undefined) ?? 'Reply concisely with a single clear next step.';
   const voice = (node.config.voice as string | undefined) ?? 'warm, direct';
@@ -260,21 +275,42 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
   const useMasterDoc = node.config.use_master_doc !== false;
   const brainBlock = useMasterDoc && ctx.brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${ctx.brainMd.trim()}\n` : '';
 
-  const r = await workerCall({
-    orgId: ctx.orgId,
-    purpose: 'reply',
-    relatedId: ctx.conversationId,
-    cacheSystem: true,
-    system:
-      `You are Synapse, replying as @${ctx.accountUsername ?? 'brand'} on Instagram. ` +
-      `Voice: ${voice}. Goal: ${goal}. Output ONLY the reply text, 1-3 sentences max, no quotes, no markdown. ` +
-      (extra ? `\n${extra}` : '') +
-      brainBlock,
-    userMessage: `Recent conversation:\n${ctx.transcript}\n\nWrite the next reply as the brand:`,
-    maxTokens: 200,
-    temperature: 0.7,
-  });
-  ctx.generatedReply = sanitizeReply(r.text.trim());
+  // Recent outbound messages (newest first) — used to reject near-duplicate replies.
+  const { data: recentUs } = await db
+    .from('messages')
+    .select('text')
+    .eq('conversation_id', ctx.conversationId)
+    .eq('sender', 'us')
+    .order('sent_at', { ascending: false })
+    .limit(5);
+  const priorBot = (recentUs ?? []).map((m) => m.text as string).filter(Boolean);
+
+  // Generate, and if the result is too similar to something we already sent, retry
+  // with an explicit anti-repeat instruction and higher temperature (up to 3 tries).
+  let reply = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const antiRepeat = attempt === 0 ? '' :
+      `\nIMPORTANT: Your previous draft was too similar to a message you already sent. Do NOT repeat yourself and do NOT re-ask a question you already asked. Acknowledge their latest message in a few words, then move the conversation forward with something new.`;
+    const r = await workerCall({
+      orgId: ctx.orgId,
+      purpose: 'reply',
+      relatedId: ctx.conversationId,
+      cacheSystem: true,
+      system:
+        `You are Synapse, replying as @${ctx.accountUsername ?? 'brand'} on Instagram. ` +
+        `Voice: ${voice}. Goal: ${goal}. Output ONLY the reply text, 1-3 sentences max, no quotes, no markdown. ` +
+        (extra ? `\n${extra}` : '') + antiRepeat +
+        brainBlock,
+      userMessage: `Recent conversation:\n${ctx.transcript}\n\nWrite the next reply as the brand:`,
+      maxTokens: 200,
+      temperature: attempt === 0 ? 0.7 : 0.9,
+    });
+    reply = sanitizeReply(r.text.trim());
+    const dup = priorBot.some((p) => jaccardSimilarity(reply, p) >= REPEAT_THRESHOLD);
+    if (!dup) break;
+    console.warn(`generate_reply: near-duplicate of a prior message (attempt ${attempt + 1}/3), regenerating`);
+  }
+  ctx.generatedReply = reply;
   return { proceed: true };
 }
 
