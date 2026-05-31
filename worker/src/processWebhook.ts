@@ -56,6 +56,14 @@ function log(...args: unknown[]) {
   console.log('[webhook]', ...args);
 }
 
+// Normalise a webhook timestamp to milliseconds. Instagram delivers `entry.time`
+// (and comment timestamps) in epoch SECONDS, while messaging events use ms.
+// Anything below ~1e12 is treated as seconds and scaled up.
+function toMs(t: string | number | undefined): number {
+  const n = Number(t) || 0;
+  return n > 0 && n < 1e12 ? n * 1000 : n;
+}
+
 function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: string[] } {
   const events: Normalized[] = [];
   const skipped: string[] = [];
@@ -75,7 +83,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             kind: 'comment', shape: 'changes', pageOrAccountId: accountId,
             userId: v.from.id, recipientId: accountId, text: v.text,
             mid: v.id, commentId: v.id, username: v.from.username,
-            timestamp: Number(v.timestamp ?? entryTime),
+            timestamp: toMs(v.timestamp ?? entryTime),
           });
           continue;
         }
@@ -88,7 +96,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             userId: v.sender.id, recipientId: v.recipient?.id ?? accountId,
             text: v.postback?.title ?? '', mid: v.postback?.mid,
             postbackPayload: v.postback?.payload ?? '',
-            timestamp: Number(v.timestamp ?? entryTime),
+            timestamp: toMs(v.timestamp ?? entryTime),
           });
           continue;
         }
@@ -104,7 +112,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             userId: v.sender.id, recipientId: v.recipient?.id ?? '',
             text: v.message.text ?? '', mid: v.message.mid,
             postbackPayload: v.message.quick_reply.payload,
-            timestamp: Number(v.timestamp ?? entryTime),
+            timestamp: toMs(v.timestamp ?? entryTime),
           });
           continue;
         }
@@ -113,7 +121,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
           kind: 'dm', shape: 'changes', pageOrAccountId: accountId,
           userId: v.sender.id, recipientId: v.recipient?.id ?? '',
           text: v.message.text, mid: v.message.mid,
-          timestamp: Number(v.timestamp ?? entryTime),
+          timestamp: toMs(v.timestamp ?? entryTime),
         });
       }
     }
@@ -131,7 +139,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
             text: ev.postback.title ?? '', mid: ev.postback.mid,
             postbackPayload: ev.postback.payload ?? '',
-            timestamp: Number(ev.timestamp ?? Date.now()),
+            timestamp: toMs(ev.timestamp ?? Date.now()),
           });
           continue;
         }
@@ -144,7 +152,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
             text: ev.message.text ?? '', mid: ev.message.mid,
             postbackPayload: ev.message.quick_reply.payload,
-            timestamp: Number(ev.timestamp ?? Date.now()),
+            timestamp: toMs(ev.timestamp ?? Date.now()),
           });
           continue;
         }
@@ -153,7 +161,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
           kind: 'dm', shape: 'messaging', pageOrAccountId: accountId,
           userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
           text: ev.message.text, mid: ev.message.mid,
-          timestamp: Number(ev.timestamp ?? Date.now()),
+          timestamp: toMs(ev.timestamp ?? Date.now()),
         });
       }
     }
