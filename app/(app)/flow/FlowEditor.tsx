@@ -9,7 +9,7 @@ import {
   type Automation, type AutomationSummary,
 } from '@/lib/data/automations';
 import {
-  type FlowGraph, type FlowNode, type FlowEdge,
+  type FlowGraph, type FlowNode, type FlowEdge, type FlowButton,
   defaultNode, newId,
 } from '@/lib/flow/types';
 
@@ -17,6 +17,7 @@ const PALETTE = [
   { kind: 'trigger', items: [
     { type: 'new_dm', label: 'New DM', icon: <I.Inbox size={14} />, color: '#FFB340' },
     { type: 'comment_keyword', label: 'Comment with keyword', icon: <I.Reply size={14} />, color: '#FFB340' },
+    { type: 'button_click', label: 'Button tapped', icon: <I.Bolt size={14} />, color: '#FFB340' },
     { type: 'story_reply', label: 'Story reply', icon: <I.Heart size={14} />, color: '#FFB340' },
   ]},
   { kind: 'ai', items: [
@@ -33,6 +34,7 @@ const PALETTE = [
   ]},
   { kind: 'action', items: [
     { type: 'send_dm', label: 'Send DM', icon: <I.Send size={14} />, color: '#DDA0FF' },
+    { type: 'send_buttons', label: 'Send DM with buttons', icon: <I.Bolt size={14} />, color: '#DDA0FF' },
     { type: 'send_link', label: 'Send funnel link', icon: <I.Link size={14} />, color: '#DDA0FF' },
     { type: 'add_tag', label: 'Tag lead', icon: <I.Tag size={14} />, color: '#DDA0FF' },
     { type: 'handoff_human', label: 'Notify human', icon: <I.Bell size={14} />, color: '#DDA0FF' },
@@ -602,6 +604,8 @@ function Canvas({
 function summarize(n: FlowNode): string {
   if (n.kind === 'trigger') {
     if (n.type === 'new_dm') return n.config.contains ? `text contains "${n.config.contains}"` : 'matches every inbound DM';
+    if (n.type === 'comment_keyword') return n.config.contains ? `comment contains "${n.config.contains}"` : 'any comment on a post';
+    if (n.type === 'button_click') return n.config.payload ? `button payload = ${n.config.payload}` : 'any button tap';
     return n.label;
   }
   if (n.kind === 'ai') {
@@ -617,6 +621,10 @@ function summarize(n: FlowNode): string {
   }
   if (n.kind === 'action') {
     if (n.type === 'send_dm') return n.config.text ? '"' + n.config.text.slice(0, 60) + (n.config.text.length > 60 ? '…' : '') + '"' : 'use AI-generated text';
+    if (n.type === 'send_buttons') {
+      const btns = (n.config.buttons ?? []) as FlowButton[];
+      return btns.length ? `buttons: ${btns.map((b) => b.title).join(', ')}` : 'no buttons set';
+    }
     if (n.type === 'add_tag') return `tag: ${n.config.tag ?? '—'}`;
     if (n.type === 'send_link') return `slug: ${n.config.link_slug ?? '—'}`;
     if (n.type === 'handoff_human') return n.config.notify ?? 'mark for human review';
@@ -684,6 +692,26 @@ function Properties({
                    onChange={(e) => patch({ from_handles: e.target.value })} />
           </Field>
         </>
+      )}
+
+      {node.kind === 'trigger' && node.type === 'comment_keyword' && (
+        <Field label="Comment keyword">
+          <input className="sx-input" placeholder="e.g. WEBINAR" value={node.config.contains ?? ''}
+                 onChange={(e) => patch({ contains: e.target.value })} />
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5 }}>
+            Fires when someone comments this word on any of your posts. Leave blank to match every comment.
+          </div>
+        </Field>
+      )}
+
+      {node.kind === 'trigger' && node.type === 'button_click' && (
+        <Field label="Button payload">
+          <input className="sx-input" placeholder="e.g. SEND_LINK" value={node.config.payload ?? ''}
+                 onChange={(e) => patch({ payload: e.target.value })} />
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5 }}>
+            Fires when the lead taps a button carrying this payload. Match it to the payload set on a “Send DM with buttons” action upstream.
+          </div>
+        </Field>
       )}
 
       {node.kind === 'ai' && node.type === 'classify_intent' && (
@@ -754,6 +782,23 @@ function Properties({
                     value={node.config.text ?? ''} onChange={(e) => patch({ text: e.target.value })} />
         </Field>
       )}
+      {node.kind === 'action' && node.type === 'send_buttons' && (
+        <>
+          <Field label="Message text">
+            <textarea className="sx-input" style={{ height: 90, paddingTop: 8 }} placeholder="Click below and I'll send you the link."
+                      value={node.config.text ?? ''} onChange={(e) => patch({ text: e.target.value })} />
+          </Field>
+          <Field label="Buttons">
+            <ButtonsEditor
+              buttons={(node.config.buttons ?? []) as FlowButton[]}
+              onChange={(buttons) => patch({ buttons })}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.5 }}>
+              Each button shows as a tappable reply. Tapping it sends the label back as the lead’s message and fires a “Button tapped” trigger with the payload.
+            </div>
+          </Field>
+        </>
+      )}
       {node.kind === 'action' && node.type === 'send_link' && (
         <Field label="Smart link slug">
           <input className="sx-input" placeholder="syn.link/half-mar" value={node.config.link_slug ?? ''}
@@ -795,6 +840,52 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div style={{ padding: '10px 0', borderBottom: '0.5px solid var(--hairline)' }}>
       <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, fontWeight: 500 }}>{label}</div>
       {children}
+    </div>
+  );
+}
+
+// Auto-derive a stable payload from a button label (e.g. "Send Link" → "SEND_LINK").
+function payloadFromTitle(title: string): string {
+  return title.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'BUTTON';
+}
+
+function ButtonsEditor({ buttons, onChange }: { buttons: FlowButton[]; onChange: (b: FlowButton[]) => void }) {
+  function update(i: number, patch: Partial<FlowButton>) {
+    onChange(buttons.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+  }
+  function remove(i: number) {
+    onChange(buttons.filter((_, idx) => idx !== i));
+  }
+  function add() {
+    onChange([...buttons, { title: 'Send Link', payload: 'SEND_LINK' }]);
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {buttons.map((b, i) => (
+        <div key={i} style={{ border: '0.5px solid var(--hairline)', borderRadius: 8, padding: 10, background: 'var(--surface-2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <span style={{ fontSize: 10.5, color: 'var(--text-3)', fontWeight: 600, letterSpacing: '0.04em' }}>BUTTON {i + 1}</span>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => remove(i)} title="Remove button"
+                    style={{ background: 'transparent', border: 0, color: 'var(--text-3)', cursor: 'pointer', padding: 2 }}>
+              <I.X size={12} />
+            </button>
+          </div>
+          <input className="sx-input" placeholder="Label, e.g. Send Link" value={b.title}
+                 onChange={(e) => {
+                   const title = e.target.value;
+                   // Keep payload in sync until the user customises it away from the auto value.
+                   const autoPrev = payloadFromTitle(b.title);
+                   const keepAuto = !b.payload || b.payload === autoPrev;
+                   update(i, keepAuto ? { title, payload: payloadFromTitle(title) } : { title });
+                 }} />
+          <input className="sx-input" style={{ marginTop: 6 }} placeholder="Payload, e.g. SEND_LINK" value={b.payload}
+                 onChange={(e) => update(i, { payload: e.target.value })} />
+        </div>
+      ))}
+      <Button kind="default" size="sm" onClick={add} style={{ justifyContent: 'center' }}>
+        <I.Plus size={12} /> Add button
+      </Button>
     </div>
   );
 }

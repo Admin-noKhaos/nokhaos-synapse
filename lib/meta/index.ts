@@ -97,9 +97,13 @@ export async function getInstagramUser(accessToken: string): Promise<IgUser> {
   return { ...json, user_id: String(json.user_id ?? json.id) };
 }
 
+// Fields we subscribe each connected IG account to. `comments` powers
+// comment-keyword automations; `messaging_postbacks` powers button taps.
+export const IG_WEBHOOK_FIELDS = 'messages,messaging_postbacks,message_reactions,comments';
+
 export async function subscribeIgWebhooks(igUserId: string, accessToken: string): Promise<void> {
   const url = new URL(`${IG_GRAPH()}/${igUserId}/subscribed_apps`);
-  url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks,message_reactions');
+  url.searchParams.set('subscribed_fields', IG_WEBHOOK_FIELDS);
   url.searchParams.set('access_token', accessToken);
   const r = await fetch(url, { method: 'POST' });
   if (!r.ok) throw new Error(`subscribe webhooks failed: ${r.status} ${await r.text()}`);

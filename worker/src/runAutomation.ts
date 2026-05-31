@@ -23,6 +23,9 @@ type FlowNode = {
 type FlowEdge = { id: string; source: string; target: string; branch?: string };
 type FlowGraph = { nodes: FlowNode[]; edges: FlowEdge[] };
 
+/** What kind of inbound event kicked off this run. Triggers match against it. */
+type EventKind = 'dm' | 'comment' | 'postback';
+
 type RunContext = {
   orgId: string;
   conversationId: string;
@@ -36,6 +39,15 @@ type RunContext = {
   /** Org's master doc — appended to every AI system prompt. */
   brainMd: string;
 
+  /** Inbound event kind. 'dm' = a normal DM, 'comment' = a post/reel comment,
+   *  'postback' = the lead tapped a button we sent. Defaults to 'dm'. */
+  eventKind: EventKind;
+  /** For 'postback' events: the payload of the button the lead tapped. */
+  postbackPayload?: string;
+  /** For 'comment' events: the comment id, used to send the first reply as a
+   *  private reply (recipient: { comment_id }). */
+  commentId?: string;
+
   // Filled by AI/condition nodes
   intent?: string;
   intentConfidence?: number;
@@ -44,7 +56,12 @@ type RunContext = {
   generatedReply?: string;
 };
 
-export async function runAutomationForMessage(input: Omit<RunContext, 'intent' | 'sentiment' | 'leadScore' | 'generatedReply' | 'intentConfidence'> & { brainMd?: string }) {
+export async function runAutomationForMessage(
+  input: Omit<RunContext, 'intent' | 'sentiment' | 'leadScore' | 'generatedReply' | 'intentConfidence' | 'eventKind'> & {
+    brainMd?: string;
+    eventKind?: EventKind;
+  },
+) {
   // Pull all live automations for the org. We run *all* of them in series.
   const { data: automations, error } = await db
     .from('automations')
@@ -58,11 +75,12 @@ export async function runAutomationForMessage(input: Omit<RunContext, 'intent' |
   if (!automations || automations.length === 0) return;
 
   const brainMd = input.brainMd ?? '';
+  const eventKind: EventKind = input.eventKind ?? 'dm';
   for (const a of automations) {
     const graph = (a.graph as FlowGraph) ?? { nodes: [], edges: [] };
     if (!graph.nodes?.length) continue;
     try {
-      await runGraph(graph, { ...input, brainMd } as RunContext, a.id, a.name);
+      await runGraph(graph, { ...input, brainMd, eventKind } as RunContext, a.id, a.name);
     } catch (e) {
       console.error(`automation ${a.id} (${a.name}) failed`, e);
     }
@@ -70,8 +88,8 @@ export async function runAutomationForMessage(input: Omit<RunContext, 'intent' |
 }
 
 async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string, automationName: string) {
-  // Find trigger nodes whose filter matches this message.
-  const triggers = graph.nodes.filter((n) => n.kind === 'trigger' && n.type === 'new_dm' && triggerMatches(n, ctx));
+  // Find trigger nodes that match this event (kind + filters).
+  const triggers = graph.nodes.filter((n) => n.kind === 'trigger' && triggerMatchesEvent(n, ctx));
   if (triggers.length === 0) return;
 
   for (const trigger of triggers) {
@@ -79,11 +97,28 @@ async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string,
   }
 }
 
-function triggerMatches(node: FlowNode, ctx: RunContext): boolean {
+function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
   const contains = (node.config.contains as string | undefined)?.trim();
-  if (contains && !ctx.messageText.toLowerCase().includes(contains.toLowerCase())) return false;
-  // from_handles filter — would need lead username; skip for v1
-  return true;
+  const textMatch = !contains || ctx.messageText.toLowerCase().includes(contains.toLowerCase());
+
+  switch (node.type) {
+    case 'new_dm':
+      // from_handles filter — would need lead username; skip for v1
+      return ctx.eventKind === 'dm' && textMatch;
+    case 'comment_keyword':
+      return ctx.eventKind === 'comment' && textMatch;
+    case 'button_click': {
+      if (ctx.eventKind !== 'postback') return false;
+      const want = (node.config.payload as string | undefined)?.trim();
+      // No payload configured → match any button tap. Otherwise exact match.
+      return !want || want === (ctx.postbackPayload ?? '').trim();
+    }
+    case 'story_reply':
+      // Story replies arrive as DMs; treat like a DM trigger for now.
+      return ctx.eventKind === 'dm' && textMatch;
+    default:
+      return false;
+  }
 }
 
 async function traverse(graph: FlowGraph, startId: string, ctx: RunContext, visited: Set<string>, automationId: string, automationName: string) {
@@ -146,6 +181,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
 
   if (node.kind === 'action') {
     if (node.type === 'send_dm') return actionSendDm(node, ctx);
+    if (node.type === 'send_buttons') return actionSendButtons(node, ctx);
     if (node.type === 'send_link') return actionSendLink(node, ctx);
     if (node.type === 'add_tag') return actionAddTag(node, ctx);
     if (node.type === 'set_funnel') return actionSetFunnel(node, ctx);
@@ -243,40 +279,38 @@ async function evaluateCondition(node: FlowNode, ctx: RunContext): Promise<{ pro
 
 // ─── Action nodes ────────────────────────────────────────────────────────────
 
-async function actionSendDm(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
-  const staticText = (node.config.text as string | undefined)?.trim();
-  const text = staticText || ctx.generatedReply;
-  if (!text) {
-    console.warn('send_dm: no text to send (no generated reply, no static text)');
-    return { proceed: true };
-  }
+type IgQuickReply = { content_type: 'text'; title: string; payload: string };
+type IgMessagePayload = { text?: string; quick_replies?: IgQuickReply[] };
 
-  // Send via Meta API
+// Send a message object to the lead via the Meta API and persist it as an 'us'
+// message. When this run was triggered by a comment, the first message is sent
+// as a private reply (recipient: { comment_id }); otherwise it goes to the
+// lead's IG-scoped id.
+async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
+  const recipient = ctx.eventKind === 'comment' && ctx.commentId
+    ? { comment_id: ctx.commentId }
+    : { id: ctx.leadIgUserId };
   try {
     const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}/messages`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
-      body: JSON.stringify({
-        recipient: { id: ctx.leadIgUserId },
-        message: { text },
-      }),
+      body: JSON.stringify({ recipient, message }),
     });
     if (!r.ok) {
-      console.error('send_dm meta call failed', r.status, await r.text());
-      return { proceed: true };
+      console.error('send message meta call failed', r.status, await r.text());
+      return;
     }
     const j = await r.json() as { message_id?: string };
 
-    // Persist as 'us' message
     await db.from('messages').insert({
       org_id: ctx.orgId,
       conversation_id: ctx.conversationId,
       ig_message_id: j.message_id ?? null,
       sender: 'us',
-      text,
+      text: persistText,
       sent_at: new Date().toISOString(),
-      ai_meta: { auto: true, automation: true },
+      ai_meta: { auto: true, automation: true, ...(message.quick_replies ? { buttons: message.quick_replies.map((q) => q.title) } : {}) },
     });
     await db.from('conversations').update({
       last_message_at: new Date().toISOString(),
@@ -284,8 +318,43 @@ async function actionSendDm(node: FlowNode, ctx: RunContext): Promise<{ proceed:
       unread_count: 0,
     }).eq('id', ctx.conversationId);
   } catch (e) {
-    console.error('send_dm failed', e);
+    console.error('send message failed', e);
   }
+}
+
+async function actionSendDm(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  const staticText = (node.config.text as string | undefined)?.trim();
+  const text = staticText || ctx.generatedReply;
+  if (!text) {
+    console.warn('send_dm: no text to send (no generated reply, no static text)');
+    return { proceed: true };
+  }
+  await sendIgMessage(ctx, { text }, text);
+  return { proceed: true };
+}
+
+// Send a DM with tappable buttons. Instagram renders these as quick replies:
+// tapping one posts the button title back as the lead's message and delivers
+// `payload` to us as a postback, which a `button_click` trigger can pick up.
+async function actionSendButtons(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  const text = (node.config.text as string | undefined)?.trim() || ctx.generatedReply;
+  if (!text) {
+    console.warn('send_buttons: no text to send');
+    return { proceed: true };
+  }
+  const rawButtons = Array.isArray(node.config.buttons) ? (node.config.buttons as Array<{ title?: string; payload?: string }>) : [];
+  const quick_replies: IgQuickReply[] = rawButtons
+    .map((b) => ({ title: (b.title ?? '').trim(), payload: (b.payload ?? b.title ?? '').trim() }))
+    .filter((b) => b.title)
+    .slice(0, 13) // Instagram allows up to 13 quick replies
+    .map((b) => ({ content_type: 'text' as const, title: b.title, payload: b.payload }));
+
+  if (quick_replies.length === 0) {
+    // No valid buttons — fall back to a plain DM so the message still goes out.
+    await sendIgMessage(ctx, { text }, text);
+    return { proceed: true };
+  }
+  await sendIgMessage(ctx, { text, quick_replies }, text);
   return { proceed: true };
 }
 
@@ -297,7 +366,8 @@ async function actionSendLink(node: FlowNode, ctx: RunContext): Promise<{ procee
   const text = ctx.generatedReply
     ? `${ctx.generatedReply} ${baseUrl}/l/${slug}`
     : `${baseUrl}/l/${slug}`;
-  return actionSendDm({ ...node, config: { text } } as FlowNode, ctx);
+  await sendIgMessage(ctx, { text }, text);
+  return { proceed: true };
 }
 
 async function actionAddTag(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {

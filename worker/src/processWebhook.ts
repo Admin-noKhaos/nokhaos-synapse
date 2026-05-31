@@ -14,23 +14,37 @@ import { ENV } from './env.js';
 import { workerCall } from './anthropic.js';
 
 type Sender = { id?: string };
-type IgMessage = { mid?: string; text?: string; is_echo?: boolean; attachments?: unknown[] };
+type IgQuickReply = { payload?: string };
+type IgMessage = { mid?: string; text?: string; is_echo?: boolean; attachments?: unknown[]; quick_reply?: IgQuickReply };
+type IgPostback = { mid?: string; title?: string; payload?: string };
+
+/** A single inbound event normalised across Instagram's webhook shapes.
+ *  kind 'dm' = a direct message, 'comment' = a post/reel comment,
+ *  'postback' = the lead tapped a button we sent. */
 type Normalized = {
+  kind: 'dm' | 'comment' | 'postback';
   pageOrAccountId: string;
-  sender: Sender;
-  recipient: Sender;
-  message: IgMessage;
+  userId: string;        // the lead: DM/postback sender id, or commenter from.id
+  recipientId: string;
+  text: string;          // DM/comment text, or the tapped button's title
+  mid?: string;          // message id / comment id — used for dedupe
+  postbackPayload?: string;
+  commentId?: string;
+  username?: string;     // commenter username when provided
   timestamp: number;
   /** Diagnostic: what shape this came from. */
   shape: 'changes' | 'messaging';
 };
 
+type CommentFrom = { id?: string; username?: string };
 type ChangeValue = {
-  sender?: Sender; recipient?: Sender; message?: IgMessage; timestamp?: string | number;
+  sender?: Sender; recipient?: Sender; message?: IgMessage; postback?: IgPostback; timestamp?: string | number;
+  // comments shape
+  id?: string; text?: string; from?: CommentFrom; media?: { id?: string }; parent_id?: string;
 };
 type Change = { field?: string; value?: ChangeValue };
 type Messaging = {
-  sender?: Sender; recipient?: Sender; message?: IgMessage; timestamp?: number;
+  sender?: Sender; recipient?: Sender; message?: IgMessage; postback?: IgPostback; timestamp?: number;
   message_edit?: { mid?: string; num_edit?: number };
   reaction?: unknown;
   read?: unknown;
@@ -48,28 +62,58 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
   const entries = payload?.entry ?? [];
   for (const entry of entries) {
     const accountId = entry.id ?? '';
+    const entryTime = Number(entry.time ?? Date.now());
     if (Array.isArray(entry.changes)) {
       for (const ch of entry.changes) {
-        if (ch.field !== 'messages') {
-          skipped.push(`changes.field=${ch.field}`);
-          continue;
-        }
         const v = ch.value ?? {};
-        if (!v.message?.text) {
-          skipped.push('changes.no_text');
+
+        // ── Comment on a post/reel ──────────────────────────────────────────
+        if (ch.field === 'comments') {
+          if (!v.text) { skipped.push('comments.no_text'); continue; }
+          if (!v.from?.id) { skipped.push('comments.no_from'); continue; }
+          events.push({
+            kind: 'comment', shape: 'changes', pageOrAccountId: accountId,
+            userId: v.from.id, recipientId: accountId, text: v.text,
+            mid: v.id, commentId: v.id, username: v.from.username,
+            timestamp: Number(v.timestamp ?? entryTime),
+          });
           continue;
         }
-        if (!v.sender?.id) {
-          skipped.push('changes.no_sender');
+
+        // ── Button tap (postback) delivered as a change ─────────────────────
+        if (ch.field === 'messaging_postbacks' || v.postback) {
+          if (!v.sender?.id) { skipped.push('postback.no_sender'); continue; }
+          events.push({
+            kind: 'postback', shape: 'changes', pageOrAccountId: accountId,
+            userId: v.sender.id, recipientId: v.recipient?.id ?? accountId,
+            text: v.postback?.title ?? '', mid: v.postback?.mid,
+            postbackPayload: v.postback?.payload ?? '',
+            timestamp: Number(v.timestamp ?? entryTime),
+          });
           continue;
         }
+
+        // ── Direct message ──────────────────────────────────────────────────
+        if (ch.field !== 'messages') { skipped.push(`changes.field=${ch.field}`); continue; }
+        if (!v.sender?.id) { skipped.push('changes.no_sender'); continue; }
+        // A tapped quick-reply arrives as a normal message carrying quick_reply.payload —
+        // treat it as a button tap so `button_click` triggers fire.
+        if (v.message?.quick_reply?.payload) {
+          events.push({
+            kind: 'postback', shape: 'changes', pageOrAccountId: accountId,
+            userId: v.sender.id, recipientId: v.recipient?.id ?? '',
+            text: v.message.text ?? '', mid: v.message.mid,
+            postbackPayload: v.message.quick_reply.payload,
+            timestamp: Number(v.timestamp ?? entryTime),
+          });
+          continue;
+        }
+        if (!v.message?.text) { skipped.push('changes.no_text'); continue; }
         events.push({
-          shape: 'changes',
-          pageOrAccountId: accountId,
-          sender: v.sender,
-          recipient: v.recipient ?? {},
-          message: v.message,
-          timestamp: Number(v.timestamp ?? Date.now()),
+          kind: 'dm', shape: 'changes', pageOrAccountId: accountId,
+          userId: v.sender.id, recipientId: v.recipient?.id ?? '',
+          text: v.message.text, mid: v.message.mid,
+          timestamp: Number(v.timestamp ?? entryTime),
         });
       }
     }
@@ -78,15 +122,37 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
         if (ev.message_edit) { skipped.push('messaging.message_edit'); continue; }
         if (ev.reaction)    { skipped.push('messaging.reaction'); continue; }
         if (ev.read)        { skipped.push('messaging.read'); continue; }
-        if (!ev.message?.text) { skipped.push('messaging.no_text'); continue; }
-        if (ev.message.is_echo) { skipped.push('messaging.echo'); continue; }
         if (!ev.sender?.id) { skipped.push('messaging.no_sender'); continue; }
+
+        // Button tap (postback)
+        if (ev.postback) {
+          events.push({
+            kind: 'postback', shape: 'messaging', pageOrAccountId: accountId,
+            userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
+            text: ev.postback.title ?? '', mid: ev.postback.mid,
+            postbackPayload: ev.postback.payload ?? '',
+            timestamp: Number(ev.timestamp ?? Date.now()),
+          });
+          continue;
+        }
+
+        if (ev.message?.is_echo) { skipped.push('messaging.echo'); continue; }
+        // Tapped quick-reply → button tap (carries quick_reply.payload).
+        if (ev.message?.quick_reply?.payload) {
+          events.push({
+            kind: 'postback', shape: 'messaging', pageOrAccountId: accountId,
+            userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
+            text: ev.message.text ?? '', mid: ev.message.mid,
+            postbackPayload: ev.message.quick_reply.payload,
+            timestamp: Number(ev.timestamp ?? Date.now()),
+          });
+          continue;
+        }
+        if (!ev.message?.text) { skipped.push('messaging.no_text'); continue; }
         events.push({
-          shape: 'messaging',
-          pageOrAccountId: accountId,
-          sender: ev.sender,
-          recipient: ev.recipient ?? {},
-          message: ev.message,
+          kind: 'dm', shape: 'messaging', pageOrAccountId: accountId,
+          userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
+          text: ev.message.text, mid: ev.message.mid,
           timestamp: Number(ev.timestamp ?? Date.now()),
         });
       }
@@ -105,10 +171,10 @@ export async function processWebhookEvent(row: { id: string; payload: Payload })
 
   for (const ev of events) {
     try {
-      await handleIgMessage(ev);
+      await handleEvent(ev);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log(`row ${row.id.slice(0, 8)}: handleIgMessage error:`, msg);
+      log(`row ${row.id.slice(0, 8)}: handleEvent error:`, msg);
       await markProcessed(row.id, msg);
       return;
     }
@@ -120,12 +186,12 @@ async function markProcessed(id: string, error: string | null) {
   await db.from('webhook_events').update({ processed_at: new Date().toISOString(), error }).eq('id', id);
 }
 
-async function handleIgMessage(ev: Normalized) {
-  const senderIgId = ev.sender.id!;
-  const recipientId = ev.recipient.id ?? '';
+async function handleEvent(ev: Normalized) {
+  const senderIgId = ev.userId;
+  const recipientId = ev.recipientId;
   const accountId = ev.pageOrAccountId;
 
-  log(`handleIgMessage: shape=${ev.shape} accountId=${accountId} sender=${senderIgId} recipient=${recipientId} text="${(ev.message.text ?? '').slice(0, 60)}"`);
+  log(`handleEvent: kind=${ev.kind} shape=${ev.shape} accountId=${accountId} sender=${senderIgId} recipient=${recipientId} text="${(ev.text ?? '').slice(0, 60)}"${ev.postbackPayload ? ` payload=${ev.postbackPayload}` : ''}`);
 
   // Match the meta_account by entry.id or recipient.id
   const candidates: string[] = [];
@@ -172,6 +238,8 @@ async function handleIgMessage(ev: Normalized) {
         meta_account_id: account.id,
         ig_user_id: senderIgId,
         last_active_at: new Date().toISOString(),
+        // Comment webhooks include the commenter's handle — capture it directly.
+        ...(ev.username ? { username: ev.username } : {}),
       },
       { onConflict: 'org_id,ig_user_id' },
     )
@@ -233,14 +301,19 @@ async function handleIgMessage(ev: Normalized) {
   }
   log(`conversation ${conv.id.slice(0, 8)}`);
 
-  // Insert message
+  // Insert message (the comment text / DM text / tapped button title)
+  const inboundMeta =
+    ev.kind === 'comment' ? { comment: true, comment_id: ev.commentId ?? null }
+    : ev.kind === 'postback' ? { postback: true, payload: ev.postbackPayload ?? null }
+    : null;
   const { error: msgErr } = await db.from('messages').insert({
     org_id: account.org_id,
     conversation_id: conv.id,
-    ig_message_id: ev.message.mid ?? null,
+    ig_message_id: ev.mid ?? null,
     sender: 'them',
-    text: ev.message.text,
+    text: ev.text,
     sent_at: new Date(ev.timestamp).toISOString(),
+    ...(inboundMeta ? { ai_meta: inboundMeta } : {}),
   });
   if (msgErr) {
     if (String(msgErr.message).toLowerCase().includes('duplicate')) {
@@ -255,12 +328,7 @@ async function handleIgMessage(ev: Normalized) {
   // Bump unread
   await db.from('conversations').update({ unread_count: (conv.unread_count ?? 0) + 1 }).eq('id', conv.id);
 
-  // ─── AI: classify ─────────────────────────────────────────────────────────
-  if (!ENV.ANTHROPIC_API_KEY) {
-    log('ANTHROPIC_API_KEY not set — skipping AI');
-    return;
-  }
-
+  // Build transcript + master doc — used by classify and by AI nodes in flows.
   const { data: msgs } = await db
     .from('messages')
     .select('sender, text')
@@ -276,7 +344,8 @@ async function handleIgMessage(ev: Normalized) {
   const brainMd = (orgRow?.brain_md as string | undefined) ?? '';
   const brainBlock = brainMd.trim() ? `\n\nMASTER DOC (authoritative — follow these rules):\n${brainMd.trim()}\n` : '';
 
-  try {
+  // ─── AI: classify (DM events only — comments/button taps are deterministic) ─
+  if (ev.kind === 'dm' && ENV.ANTHROPIC_API_KEY) try {
     const classify = await workerCall({
       orgId: account.org_id,
       purpose: 'classify',
@@ -317,9 +386,12 @@ async function handleIgMessage(ev: Normalized) {
       accountToken: account.access_token,
       accountUsername: account.username ?? null,
       leadIgUserId: senderIgId,
-      messageText: ev.message.text ?? '',
+      messageText: ev.text ?? '',
       transcript,
       brainMd,
+      eventKind: ev.kind,
+      postbackPayload: ev.postbackPayload,
+      commentId: ev.commentId,
     });
     log('automation run complete');
   } catch (e) {

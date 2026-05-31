@@ -3,10 +3,14 @@
 
 export type NodeKind = 'trigger' | 'ai' | 'condition' | 'action';
 
-export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply';
+export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply' | 'button_click';
 export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag';
 export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'else';
-export type ActionType = 'send_dm' | 'send_link' | 'add_tag' | 'set_funnel' | 'handoff_human';
+export type ActionType = 'send_dm' | 'send_buttons' | 'send_link' | 'add_tag' | 'set_funnel' | 'handoff_human';
+
+/** A tappable button attached to a send_buttons message. Tapping it sends the
+ *  title back as the lead's reply and fires `payload` as a button_click event. */
+export type FlowButton = { title: string; payload: string };
 
 export type FlowNode =
   | {
@@ -35,10 +39,12 @@ export type FlowNode =
     };
 
 export type TriggerConfig = {
-  /** Optional substring filter on inbound text. Empty = match all. */
+  /** Optional substring filter on inbound text (new_dm, comment_keyword). Empty = match all. */
   contains?: string;
   /** Optional comma-separated list of IG handles to limit to. */
   from_handles?: string;
+  /** For button_click: the payload of the tapped button this trigger fires on. */
+  payload?: string;
 };
 
 export type AiConfig = {
@@ -66,8 +72,10 @@ export type ConditionConfig = {
 };
 
 export type ActionConfig = {
-  /** Static text for send_dm; supports {{var}} interpolation from run context. */
+  /** Static text for send_dm / send_buttons; supports {{var}} interpolation from run context. */
   text?: string;
+  /** Tappable buttons for send_buttons (rendered as Instagram quick replies). */
+  buttons?: FlowButton[];
   /** Smart link slug for send_link. */
   link_slug?: string;
   /** Tag value for add_tag. */
@@ -126,13 +134,17 @@ export function defaultNode(kind: NodeKind, type: string, position: { x: number;
     case 'action':
       return {
         ...base, kind: 'action', type: type as ActionType, label: actionLabel(type as ActionType),
-        config: type === 'send_dm' ? { text: '' } : type === 'add_tag' ? { tag: 'interested' } : {},
+        config: type === 'send_dm'
+          ? { text: '' }
+          : type === 'send_buttons'
+            ? { text: '', buttons: [{ title: 'Send Link', payload: 'SEND_LINK' }] }
+            : type === 'add_tag' ? { tag: 'interested' } : {},
       };
   }
 }
 
 function triggerLabel(t: TriggerType) {
-  return { new_dm: 'New DM received', comment_keyword: 'Comment with keyword', story_reply: 'Story reply' }[t];
+  return { new_dm: 'New DM received', comment_keyword: 'Comment with keyword', story_reply: 'Story reply', button_click: 'Button tapped' }[t];
 }
 function aiLabel(t: AiType) {
   return { classify_intent: 'Classify intent', generate_reply: 'Generate reply', score_lead: 'Score lead', tag: 'Auto-tag' }[t];
@@ -141,7 +153,7 @@ function conditionLabel(t: ConditionType) {
   return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', else: 'Else' }[t];
 }
 function actionLabel(t: ActionType) {
-  return { send_dm: 'Send DM', send_link: 'Send funnel link', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
+  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', send_link: 'Send funnel link', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
 }
 
 // ─── Default templates (used by the "Create from template" empty-state) ────
