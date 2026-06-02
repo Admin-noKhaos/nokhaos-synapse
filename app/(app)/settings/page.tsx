@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentSession } from '@/lib/auth';
 import { getSupabaseServer } from '@/lib/supabase/server';
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { metaConfigured, anthropicConfigured, serviceRoleConfigured } from '@/lib/env';
 import { SettingsClient } from './SettingsClient';
 
@@ -22,6 +23,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     .eq('org_id', session.org.id)
     .order('created_at', { ascending: false })
     .limit(10);
+
+  // Tester whitelist (admin client — table is RLS-locked to service role).
+  const admin = getSupabaseAdmin();
+  const { data: testers } = await admin
+    .from('automation_testers')
+    .select('id, ig_user_id, username, label, created_at')
+    .eq('org_id', session.org.id)
+    .order('created_at', { ascending: false });
 
   return (
     <SettingsClient
@@ -51,6 +60,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         id: r.id, kind: r.kind, amount_usd: Number(r.amount_usd),
         description: r.description, created_at: r.created_at,
       }))}
+      testers={(testers ?? []).map((t) => ({
+        id: t.id, ig_user_id: t.ig_user_id, username: t.username, label: t.label, created_at: t.created_at,
+      }))}
+      dmTarget={(metaAccounts ?? [])[0]?.username ?? null}
     />
   );
 }

@@ -258,6 +258,7 @@ async function handleEvent(ev: Normalized) {
     throw new Error(`lead upsert failed: ${leadErr?.message}`);
   }
   log(`lead ${lead.id.slice(0, 8)} (@${lead.username ?? 'unknown'})`);
+  let leadUsername: string | null = (lead.username as string | null) ?? ev.username ?? null;
 
   // Backfill username/display_name/profile_pic from IG Graph if missing.
   // Best-effort — failures don't break the pipeline.
@@ -270,6 +271,7 @@ async function handleEvent(ev: Normalized) {
       if (r.ok) {
         const profile = await r.json() as { username?: string; name?: string; profile_pic?: string; is_verified_user?: boolean };
         if (profile.username) {
+          leadUsername = profile.username;
           await db.from('leads').update({
             username: profile.username,
             display_name: profile.name ?? profile.username,
@@ -308,6 +310,29 @@ async function handleEvent(ev: Normalized) {
     throw new Error(`conversation upsert failed: ${convErr?.message}`);
   }
   log(`conversation ${conv.id.slice(0, 8)}`);
+
+  // ─── Tester command channel ────────────────────────────────────────────────
+  // Whitelisted tester accounts can drive the bot from inside Instagram with DM
+  // commands (/reset, /teach, /undo, /help). These are control messages: we run
+  // the command, confirm via DM, and skip normal storage + AI handling entirely.
+  const command = ev.kind === 'dm' ? parseCommand(ev.text) : null;
+  if (command) {
+    const tester = await isWhitelistedTester(account.org_id, senderIgId, leadUsername);
+    if (tester) {
+      log(`tester command from @${leadUsername ?? senderIgId}: ${command.kind}`);
+      await handleTesterCommand(command, {
+        orgId: account.org_id,
+        accountIgUserId: account.ig_user_id ?? '',
+        accountToken: account.access_token,
+        conversationId: conv.id,
+        leadId: lead.id,
+        recipientIgId: senderIgId,
+        who: leadUsername ?? senderIgId,
+      });
+      return; // control message handled — do not store or run automations
+    }
+    log('command-like message from non-tester — handling as a normal message');
+  }
 
   // First contact = no prior messages in this conversation (measured BEFORE we
   // insert the current inbound). Lets flows branch first-timers vs returning leads.
@@ -431,4 +456,168 @@ async function handleEvent(ev: Normalized) {
   } catch (e) {
     log('runAutomationForMessage failed', e instanceof Error ? e.message : String(e));
   }
+}
+
+// ─── Tester command channel ──────────────────────────────────────────────────
+
+type TesterCommand =
+  | { kind: 'reset' }
+  | { kind: 'teach'; arg: string }
+  | { kind: 'undo' }
+  | { kind: 'help' }
+  | { kind: 'unknown'; name: string };
+
+// Parse a leading-slash command, e.g. "/teach be more casual". Returns null for
+// anything that is not a command so normal handling proceeds.
+function parseCommand(text: string | undefined): TesterCommand | null {
+  const t = (text ?? '').trim();
+  if (!t.startsWith('/')) return null;
+  const m = t.match(/^\/(\w+)\s*([\s\S]*)$/);
+  if (!m) return null;
+  const name = m[1].toLowerCase();
+  const arg = m[2].trim();
+  if (['reset', 'restart', 'clear'].includes(name)) return { kind: 'reset' };
+  if (['teach', 'style', 'info', 'update', 'remember'].includes(name)) return { kind: 'teach', arg };
+  if (['undo', 'revert'].includes(name)) return { kind: 'undo' };
+  if (['help', 'commands', 'cmds'].includes(name)) return { kind: 'help' };
+  return { kind: 'unknown', name };
+}
+
+async function isWhitelistedTester(orgId: string, igUserId: string, username: string | null): Promise<boolean> {
+  const ors = [`ig_user_id.eq.${igUserId}`];
+  if (username) ors.push(`username.ilike.${username}`);
+  const { data, error } = await db
+    .from('automation_testers')
+    .select('id')
+    .eq('org_id', orgId)
+    .or(ors.join(','))
+    .limit(1);
+  if (error) { log('tester lookup failed', error.message); return false; }
+  return !!(data && data.length);
+}
+
+// Send a plain DM (control confirmation). Not stored as a conversation message.
+async function sendTesterDm(accountIgUserId: string, accountToken: string, recipientIgId: string, text: string): Promise<void> {
+  try {
+    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${accountIgUserId}/messages`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accountToken}` },
+      body: JSON.stringify({ recipient: { id: recipientIgId }, message: { text } }),
+    });
+    if (!r.ok) log('tester DM send failed', r.status, (await r.text()).slice(0, 200));
+  } catch (e) {
+    log('tester DM send error', e instanceof Error ? e.message : String(e));
+  }
+}
+
+// Turn a free-form tester instruction into a single concise rule for the master doc.
+async function distillTweak(orgId: string, instruction: string): Promise<string> {
+  const r = await workerCall({
+    orgId,
+    purpose: 'reply',
+    cacheSystem: false,
+    system:
+      `You convert a tester instruction into ONE concise rule for a brand's Instagram DM AI. ` +
+      `Output ONLY the rule as a single short imperative line. No quotes, no preamble, no markdown, no em dashes. ` +
+      `If it is about tone or wording, phrase it as a style rule. If it is a fact, price, link, or detail, phrase it as a fact the AI can state.`,
+    userMessage: `Tester instruction: ${instruction}\n\nWrite the single rule:`,
+    maxTokens: 120,
+    temperature: 0.2,
+  });
+  return r.text.trim().replace(/^["'\s-]+/, '').replace(/\s+/g, ' ').trim();
+}
+
+const TWEAKS_HEADER = '=== LIVE TESTER TWEAKS (highest priority, newest first) ===';
+const TWEAKS_FOOTER = '=== END LIVE TESTER TWEAKS ===';
+
+// Insert a new rule at the top of the tester-tweaks block, creating the block at
+// the very top of the doc if it does not exist yet.
+function appendTweak(brain: string, rule: string, who: string): string {
+  const bullet = `- ${rule} (via @${who})`;
+  if (brain.includes(TWEAKS_HEADER)) {
+    return brain.replace(`${TWEAKS_HEADER}\n`, `${TWEAKS_HEADER}\n${bullet}\n`);
+  }
+  return `${TWEAKS_HEADER}\n${bullet}\n${TWEAKS_FOOTER}\n\n${brain}`;
+}
+
+type CommandCtx = {
+  orgId: string;
+  accountIgUserId: string;
+  accountToken: string;
+  conversationId: string;
+  leadId: string;
+  recipientIgId: string;
+  who: string;
+};
+
+async function handleTesterCommand(cmd: TesterCommand, ctx: CommandCtx): Promise<void> {
+  const reply = (text: string) => sendTesterDm(ctx.accountIgUserId, ctx.accountToken, ctx.recipientIgId, text);
+
+  if (cmd.kind === 'reset') {
+    await db.from('messages').delete().eq('org_id', ctx.orgId).eq('conversation_id', ctx.conversationId);
+    await db.from('conversations').update({
+      unread_count: 0, last_message_at: null, next_action: null, status: 'open',
+    }).eq('id', ctx.conversationId);
+    await db.from('leads').update({ score: null, sentiment: null, ai_notes: null, tags: [] }).eq('id', ctx.leadId);
+    log(`tester reset conversation ${ctx.conversationId.slice(0, 8)}`);
+    await reply('Chat reset. Send the keyword or a new message to start fresh.');
+    return;
+  }
+
+  if (cmd.kind === 'teach') {
+    if (!cmd.arg) {
+      await reply('Tell me what to change after the command. Example: /teach be more casual and never mention price first.');
+      return;
+    }
+    const { data: orgRow } = await db.from('organizations').select('brain_md').eq('id', ctx.orgId).single();
+    const current = (orgRow?.brain_md as string | undefined) ?? '';
+    let rule: string;
+    try {
+      rule = await distillTweak(ctx.orgId, cmd.arg);
+    } catch (e) {
+      log('distillTweak failed', e instanceof Error ? e.message : String(e));
+      rule = cmd.arg.replace(/\s+/g, ' ').trim(); // fall back to the raw instruction
+    }
+    if (!rule) { await reply('Could not turn that into a rule. Try rephrasing.'); return; }
+    // Snapshot the doc BEFORE the change so /undo and the UI can revert.
+    await db.from('brain_md_history').insert({
+      org_id: ctx.orgId, brain_md: current, changed_by: ctx.who, source: 'tester_dm', note: rule,
+    });
+    const next = appendTweak(current, rule, ctx.who);
+    const { error } = await db.from('organizations').update({ brain_md: next, updated_at: new Date().toISOString() }).eq('id', ctx.orgId);
+    if (error) { log('teach update failed', error.message); await reply('Something went wrong saving that. Try again.'); return; }
+    log(`tester taught rule: ${rule}`);
+    await reply(`Added to the brain:\n"${rule}"\n\nIt applies from your next message. Send /undo to revert.`);
+    return;
+  }
+
+  if (cmd.kind === 'undo') {
+    const { data: hist } = await db
+      .from('brain_md_history')
+      .select('id, brain_md')
+      .eq('org_id', ctx.orgId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (!hist || hist.length === 0) { await reply('Nothing to undo.'); return; }
+    const snap = hist[0] as { id: string; brain_md: string };
+    await db.from('organizations').update({ brain_md: snap.brain_md, updated_at: new Date().toISOString() }).eq('id', ctx.orgId);
+    await db.from('brain_md_history').delete().eq('id', snap.id);
+    log('tester undo: reverted last brain change');
+    await reply('Reverted the last brain change.');
+    return;
+  }
+
+  if (cmd.kind === 'help') {
+    await reply([
+      'Tester commands:',
+      '/reset  - wipe this chat and start fresh',
+      '/teach <change>  - update the master doc (style or info)',
+      '/undo  - revert the last /teach',
+      '/help  - show this list',
+    ].join('\n'));
+    return;
+  }
+
+  await reply(`Unknown command "/${cmd.name}". Send /help to see what I can do.`);
 }

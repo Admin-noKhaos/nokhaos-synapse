@@ -8,11 +8,14 @@ import { Avatar, Card, CardHeader, CardBody, Button, Pill } from '@/lib/primitiv
 import { ACCENTS, type AccentKey } from '@/lib/theme';
 import { useTheme } from '@/components/ThemeProvider';
 
-type Tab = 'account' | 'voice' | 'connections' | 'billing' | 'appearance' | 'team';
+type Tab = 'account' | 'voice' | 'testers' | 'connections' | 'billing' | 'appearance' | 'team';
+
+type Tester = { id: string; ig_user_id: string | null; username: string | null; label: string | null; created_at: string };
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'account',     label: 'Account',     icon: <I.Settings size={14} /> },
   { id: 'voice',       label: 'Brand voice', icon: <I.Brain    size={14} /> },
+  { id: 'testers',     label: 'Testers',     icon: <I.Bolt     size={14} /> },
   { id: 'connections', label: 'Connections', icon: <I.Link     size={14} /> },
   { id: 'billing',     label: 'Billing',     icon: <I.Coin     size={14} /> },
   { id: 'appearance',  label: 'Appearance',  icon: <I.Sun      size={14} /> },
@@ -31,6 +34,8 @@ export function SettingsClient(props: {
   flags: { meta: boolean; anthropic: boolean; service_role: boolean };
   metaAccounts: { id: string; username: string | null; page_name: string | null; status: string; webhook_subscribed: boolean; account_type: string | null }[];
   ledger: { id: string; kind: string; amount_usd: number; description: string | null; created_at: string }[];
+  testers: Tester[];
+  dmTarget: string | null;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -95,6 +100,7 @@ export function SettingsClient(props: {
         <div>
           {tab === 'account' && <AccountTab session={props.session} />}
           {tab === 'voice' && <VoiceTab brain={props.session.brain} />}
+          {tab === 'testers' && <TestersTab testers={props.testers} dmTarget={props.dmTarget} canEdit={props.session.orgRole === 'owner' || props.session.orgRole === 'admin'} />}
           {tab === 'connections' && <ConnectionsTab metaAccounts={props.metaAccounts} flags={props.flags} />}
           {tab === 'billing' && <BillingTab balanceUsd={props.session.balanceUsd} ledger={props.ledger} role={props.session.orgRole} flags={props.flags} />}
           {tab === 'appearance' && <AppearanceTab />}
@@ -155,6 +161,111 @@ function VoiceTab({ brain }: { brain: string }) {
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+function TestersTab({ testers, dmTarget, canEdit }: { testers: Tester[]; dmTarget: string | null; canEdit: boolean }) {
+  const router = useRouter();
+  const [username, setUsername] = useState('');
+  const [igId, setIgId] = useState('');
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (!username.trim() && !igId.trim()) { setError('Enter an @username or an IG user id.'); return; }
+    setBusy(true); setError(null);
+    const r = await fetch('/api/testers', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username.trim() || undefined, ig_user_id: igId.trim() || undefined, label: label.trim() || undefined }),
+    });
+    setBusy(false);
+    if (r.ok) { setUsername(''); setIgId(''); setLabel(''); router.refresh(); }
+    else {
+      const d = await r.json().catch(() => ({}));
+      setError(d.error === 'already_added' ? 'That account is already a tester.' : (d.detail || d.error || `HTTP ${r.status}`));
+    }
+  }
+
+  async function remove(id: string) {
+    if (!confirm('Remove this tester?')) return;
+    setRemoving(id);
+    const r = await fetch(`/api/testers/${id}`, { method: 'DELETE' });
+    setRemoving(null);
+    if (r.ok) router.refresh();
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader
+          title="Tester accounts"
+          sub="Instagram accounts allowed to drive the bot with DM commands"
+          right={<Pill tone={testers.length ? 'green' : 'cold'} dot={testers.length > 0}>{testers.length} {testers.length === 1 ? 'tester' : 'testers'}</Pill>}
+        />
+        <CardBody>
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.55, marginBottom: 12 }}>
+            Only these accounts can run commands. Everyone else&apos;s messages are treated as normal conversation, so a random follower can never reset a chat or edit your master doc.
+          </div>
+
+          {testers.length === 0 ? (
+            <div style={{ padding: '14px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 12.5 }}>No testers yet. Add one below.</div>
+          ) : (
+            testers.map((t) => (
+              <div key={t.id} className="row">
+                <Avatar name={t.username || t.ig_user_id || '?'} size={30} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{t.username ? `@${t.username}` : t.ig_user_id}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    {t.label ? t.label + ' · ' : ''}{t.username && t.ig_user_id ? `id ${t.ig_user_id}` : t.username ? 'matched by username' : 'matched by id'}
+                  </div>
+                </div>
+                {canEdit && (
+                  <Button kind="ghost" size="sm" disabled={removing === t.id} onClick={() => remove(t.id)} title="Remove"><I.X size={13} /></Button>
+                )}
+              </div>
+            ))
+          )}
+
+          {canEdit ? (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: '0.5px solid var(--hairline)' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <Field label="@username">
+                  <input className="sx-input" placeholder="theirusername" value={username} onChange={(e) => setUsername(e.target.value)} style={{ width: 180 }} />
+                </Field>
+                <Field label="or IG user id">
+                  <input className="sx-input" placeholder="178414..." value={igId} onChange={(e) => setIgId(e.target.value)} style={{ width: 150 }} />
+                </Field>
+                <Field label="label (optional)">
+                  <input className="sx-input" placeholder="e.g. Phil's phone" value={label} onChange={(e) => setLabel(e.target.value)} style={{ width: 150 }} />
+                </Field>
+                <Button kind="primary" size="sm" disabled={busy} onClick={add}><I.Plus size={13} /> {busy ? 'Adding…' : 'Add tester'}</Button>
+              </div>
+              {error && <div style={{ fontSize: 11, color: '#FF6E63', marginTop: 8 }}>{error}</div>}
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.5 }}>
+                Username is easiest. The IG user id is matched automatically once they DM you, so either works.
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 12 }}>Only owners and admins can manage testers.</div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card style={{ marginTop: 12 }}>
+        <CardHeader title="Commands" sub={dmTarget ? `Testers DM @${dmTarget} with these` : 'Testers DM your connected account with these'} />
+        <CardBody>
+          <div className="row"><code style={{ fontSize: 12, color: 'var(--accent-1)', minWidth: 150 }}>/reset</code><span style={{ flex: 1, fontSize: 12.5 }}>Wipe the chat and start fresh</span></div>
+          <div className="row"><code style={{ fontSize: 12, color: 'var(--accent-1)', minWidth: 150 }}>/teach &lt;change&gt;</code><span style={{ flex: 1, fontSize: 12.5 }}>Update the master doc — style or info (e.g. <em>/teach be more casual</em>)</span></div>
+          <div className="row"><code style={{ fontSize: 12, color: 'var(--accent-1)', minWidth: 150 }}>/undo</code><span style={{ flex: 1, fontSize: 12.5 }}>Revert the last /teach change</span></div>
+          <div className="row"><code style={{ fontSize: 12, color: 'var(--accent-1)', minWidth: 150 }}>/help</code><span style={{ flex: 1, fontSize: 12.5 }}>Show the command list in the DM</span></div>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55 }}>
+            Changes from <code>/teach</code> land in a high-priority block at the top of your <a href="/brain" style={{ color: 'var(--accent-1)' }}>master doc</a> and apply to the next message. Every change is versioned and revertible there.
+          </div>
+        </CardBody>
+      </Card>
+    </>
   );
 }
 
@@ -333,6 +444,15 @@ function AppearanceTab() {
         </CardBody>
       </Card>
     </>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 5 }}>{label}</div>
+      {children}
+    </div>
   );
 }
 

@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { I } from '@/lib/icons';
 import { Card, CardHeader, CardBody, Button, Pill } from '@/lib/primitives';
+
+type HistoryEntry = { id: string; changed_by: string | null; source: string | null; note: string | null; created_at: string; chars: number };
 
 const PLACEHOLDER = `# Brand voice
 - Warm, direct, no fluff. Two sentences max per reply when possible.
@@ -26,12 +29,36 @@ const PLACEHOLDER = `# Brand voice
 - Refunds: 14 days, no questions asked.
 `;
 
-export function BrainEditor({ initial, orgName }: { initial: string; orgName: string }) {
+export function BrainEditor({ initial, orgName, history = [] }: { initial: string; orgName: string; history?: HistoryEntry[] }) {
+  const router = useRouter();
   const [value, setValue] = useState(initial);
   const [saved, setSaved] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [reverting, setReverting] = useState<string | null>(null);
+
+  async function revert(id: string) {
+    if (!confirm('Revert the master doc to this version? Your current version is snapshotted first, so this is undoable.')) return;
+    setReverting(id);
+    setError(null);
+    try {
+      const r = await fetch('/api/brain/history', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(d.detail || d.error || `HTTP ${r.status}`); return; }
+      router.refresh();
+      // Pull the reverted doc into the editor without a full reload.
+      const g = await fetch('/api/brain').then((x) => x.json()).catch(() => null);
+      if (g?.brain_md != null) { setValue(g.brain_md); setSaved(g.brain_md); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReverting(null);
+    }
+  }
 
   const dirty = value !== saved;
   const wordCount = value.trim().split(/\s+/).filter(Boolean).length;
@@ -149,9 +176,44 @@ export function BrainEditor({ initial, orgName }: { initial: string; orgName: st
             </div>
           </CardBody>
         </Card>
+
+        <Card style={{ marginTop: 12 }}>
+          <CardHeader title="Change history" sub="App edits and tester /teach changes" right={<Pill>{history.length}</Pill>} />
+          <CardBody>
+            {history.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '6px 0' }}>No changes recorded yet.</div>
+            ) : (
+              history.map((h) => (
+                <div key={h.id} className="info-row" style={{ alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, borderBottom: '0.5px solid var(--hairline)' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text)' }}>
+                      {h.note ? h.note : sourceLabel(h.source)}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                      {sourceLabel(h.source)} · {h.changed_by ? `${h.changed_by} · ` : ''}{timeAgo(new Date(h.created_at))}
+                    </div>
+                  </div>
+                  <Button kind="ghost" size="sm" disabled={reverting === h.id} onClick={() => revert(h.id)} title="Restore this version">
+                    {reverting === h.id ? '…' : 'Restore'}
+                  </Button>
+                </div>
+              ))
+            )}
+            <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+              Each entry is the doc as it was before that change. Restoring snapshots your current version first, so it&apos;s always reversible.
+            </div>
+          </CardBody>
+        </Card>
       </div>
     </div>
   );
+}
+
+function sourceLabel(s: string | null): string {
+  if (s === 'tester_dm') return 'Tester /teach';
+  if (s === 'app_edit') return 'Editor save';
+  if (s === 'app_revert') return 'Revert';
+  return s ?? 'change';
 }
 
 function timeAgo(d: Date): string {
