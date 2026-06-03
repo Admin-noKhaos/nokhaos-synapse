@@ -44,6 +44,9 @@ export type TriggerConfig = {
   contains?: string;
   /** Optional comma-separated list of IG handles to limit to. */
   from_handles?: string;
+  /** For comment_keyword: limit to comments on posts (feed) or reels only.
+   *  Undefined / 'any' = both. Lets you send a different link per media type. */
+  media?: 'any' | 'post' | 'reel';
   /** For button_click: the payload of the tapped button this trigger fires on. */
   payload?: string;
 };

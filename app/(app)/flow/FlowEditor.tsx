@@ -607,7 +607,11 @@ function Canvas({
 function summarize(n: FlowNode): string {
   if (n.kind === 'trigger') {
     if (n.type === 'new_dm') return n.config.contains ? `text contains "${n.config.contains}"` : 'matches every inbound DM';
-    if (n.type === 'comment_keyword') return n.config.contains ? `comment contains "${n.config.contains}"` : 'any comment on a post';
+    if (n.type === 'comment_keyword') {
+      const m = (n.config.media as string) ?? 'any';
+      const scope = m === 'reel' ? ' (reels)' : m === 'post' ? ' (posts)' : '';
+      return (n.config.contains ? `comment contains "${n.config.contains}"` : 'any comment') + scope;
+    }
     if (n.type === 'button_click') return n.config.payload ? `button payload = ${n.config.payload}` : 'any button tap';
     return n.label;
   }
@@ -716,6 +720,19 @@ function Properties({
               ? 'Fires when a comment on a post or reel contains any of these words.'
               : 'Fires when a story reply contains any of these words.'}
             {' '}Case-insensitive. Separate multiple with commas. Leave blank to match all.
+          </div>
+        </Field>
+      )}
+
+      {node.kind === 'trigger' && node.type === 'comment_keyword' && (
+        <Field label="Media type">
+          <select className="sx-input" value={(node.config.media as string) ?? 'any'} onChange={(e) => patch({ media: e.target.value })}>
+            <option value="any">Posts and reels</option>
+            <option value="post">Posts only</option>
+            <option value="reel">Reels only</option>
+          </select>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5 }}>
+            Split posts vs reels into separate triggers if you want to send a different link for each.
           </div>
         </Field>
       )}

@@ -47,6 +47,8 @@ type RunContext = {
   /** For 'comment' events: the comment id, used to send the first reply as a
    *  private reply (recipient: { comment_id }), and to post a public comment reply. */
   commentId?: string;
+  /** For 'comment' events: the media type the comment is on (FEED | REELS | ...). */
+  commentMediaType?: string;
   /** True when the inbound DM is a reply to one of the account's stories. */
   isStoryReply?: boolean;
   /** Whether the lead follows the business. Undefined = unknown. Used to decide
@@ -72,6 +74,7 @@ export async function runAutomationForMessage(
     isFirstContact?: boolean;
     isStoryReply?: boolean;
     userFollowsBusiness?: boolean;
+    commentMediaType?: string;
   },
 ) {
   // Pull all live automations for the org. We run *all* of them in series.
@@ -127,8 +130,13 @@ function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
     case 'new_dm':
       // from_handles filter — would need lead username; skip for v1
       return ctx.eventKind === 'dm' && keywordMatches(node, ctx.messageText);
-    case 'comment_keyword':
-      return ctx.eventKind === 'comment' && keywordMatches(node, ctx.messageText);
+    case 'comment_keyword': {
+      if (ctx.eventKind !== 'comment' || !keywordMatches(node, ctx.messageText)) return false;
+      const media = (node.config.media as string | undefined) ?? 'any';
+      if (media === 'any') return true;
+      const isReel = (ctx.commentMediaType ?? '').toUpperCase() === 'REELS';
+      return media === 'reel' ? isReel : !isReel; // 'post' = anything that is not a reel
+    }
     case 'button_click': {
       if (ctx.eventKind !== 'postback') return false;
       const want = (node.config.payload as string | undefined)?.trim();

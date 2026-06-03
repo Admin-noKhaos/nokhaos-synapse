@@ -31,6 +31,7 @@ type Normalized = {
   mid?: string;          // message id / comment id — used for dedupe
   postbackPayload?: string;
   commentId?: string;
+  commentMediaType?: string; // FEED | REELS | ... for comment events
   isStoryReply?: boolean; // DM that is a reply to one of our stories
   username?: string;     // commenter username when provided
   timestamp: number;
@@ -42,7 +43,7 @@ type CommentFrom = { id?: string; username?: string };
 type ChangeValue = {
   sender?: Sender; recipient?: Sender; message?: IgMessage; postback?: IgPostback; timestamp?: string | number;
   // comments shape
-  id?: string; text?: string; from?: CommentFrom; media?: { id?: string }; parent_id?: string;
+  id?: string; text?: string; from?: CommentFrom; media?: { id?: string; media_product_type?: string }; parent_id?: string;
 };
 type Change = { field?: string; value?: ChangeValue };
 type Messaging = {
@@ -85,6 +86,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             kind: 'comment', shape: 'changes', pageOrAccountId: accountId,
             userId: v.from.id, recipientId: accountId, text: v.text,
             mid: v.id, commentId: v.id, username: v.from.username,
+            commentMediaType: v.media?.media_product_type,
             timestamp: toMs(v.timestamp ?? entryTime),
           });
           continue;
@@ -473,6 +475,7 @@ async function handleEvent(ev: Normalized) {
       eventKind: ev.kind,
       postbackPayload: ev.postbackPayload,
       commentId: ev.commentId,
+      commentMediaType: ev.commentMediaType,
       isFirstContact,
       isStoryReply: ev.isStoryReply,
       userFollowsBusiness,
