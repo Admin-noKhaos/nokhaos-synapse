@@ -379,20 +379,55 @@ type IgMessagePayload = { text?: string; quick_replies?: IgQuickReply[] };
 // message. When this run was triggered by a comment, the first message is sent
 // as a private reply (recipient: { comment_id }); otherwise it goes to the
 // lead's IG-scoped id.
+// Take over the conversation thread from the Instagram inbox / another app, so we
+// can send. Needed when a message arrived via the handover-protocol standby channel
+// (we're not the thread owner). Best-effort: returns true if control was taken.
+async function takeThreadControl(ctx: RunContext): Promise<boolean> {
+  try {
+    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}/take_thread_control`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
+      body: JSON.stringify({ recipient: { id: ctx.leadIgUserId } }),
+    });
+    if (!r.ok) {
+      console.error('take_thread_control failed', r.status, await r.text());
+      return false;
+    }
+    console.log('took thread control for', ctx.leadIgUserId);
+    return true;
+  } catch (e) {
+    console.error('take_thread_control error', e);
+    return false;
+  }
+}
+
 async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
   const recipient = ctx.eventKind === 'comment' && ctx.commentId
     ? { comment_id: ctx.commentId }
     : { id: ctx.leadIgUserId };
+  const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}/messages`;
+  const post = () => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
+    body: JSON.stringify({ recipient, message }),
+  });
   try {
-    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}/messages`;
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
-      body: JSON.stringify({ recipient, message }),
-    });
+    let r = await post();
     if (!r.ok) {
-      console.error('send message meta call failed', r.status, await r.text());
-      return;
+      const errText = await r.text();
+      // Handover protocol: we're not the thread owner. Take control and retry once.
+      // (Only possible for id-recipients, not comment_id private replies.)
+      if ('id' in recipient && (errText.includes('2534037') || errText.toLowerCase().includes('not the thread owner'))) {
+        console.warn('send blocked (not thread owner) — attempting take_thread_control');
+        if (await takeThreadControl(ctx)) {
+          r = await post();
+        }
+      }
+      if (!r.ok) {
+        console.error('send message meta call failed', r.status, r.ok ? '' : errText);
+        return;
+      }
     }
     const j = await r.json() as { message_id?: string };
 
