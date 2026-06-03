@@ -45,8 +45,13 @@ type RunContext = {
   /** For 'postback' events: the payload of the button the lead tapped. */
   postbackPayload?: string;
   /** For 'comment' events: the comment id, used to send the first reply as a
-   *  private reply (recipient: { comment_id }). */
+   *  private reply (recipient: { comment_id }), and to post a public comment reply. */
   commentId?: string;
+  /** True when the inbound DM is a reply to one of the account's stories. */
+  isStoryReply?: boolean;
+  /** Whether the lead follows the business. Undefined = unknown. Used to decide
+   *  whether to add a "check your message requests" note on public comment replies. */
+  userFollowsBusiness?: boolean;
   /** True when this is the lead's very first interaction (no prior messages).
    *  Lets a flow branch: first-timers get the full keyword flow, returning
    *  leads get a normal AI reply instead of re-running it. */
@@ -65,6 +70,8 @@ export async function runAutomationForMessage(
     brainMd?: string;
     eventKind?: EventKind;
     isFirstContact?: boolean;
+    isStoryReply?: boolean;
+    userFollowsBusiness?: boolean;
   },
 ) {
   // Pull all live automations for the org. We run *all* of them in series.
@@ -103,16 +110,25 @@ async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string,
   }
 }
 
-function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
-  const contains = (node.config.contains as string | undefined)?.trim();
-  const textMatch = !contains || ctx.messageText.toLowerCase().includes(contains.toLowerCase());
+// Keyword filter. `contains` may be a single term or comma-separated terms
+// ("START, VIDEO, TRAINING") — matches if ANY term appears (case-insensitive).
+// Empty = match all.
+function keywordMatches(node: FlowNode, text: string): boolean {
+  const raw = (node.config.contains as string | undefined)?.trim();
+  if (!raw) return true;
+  const terms = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (terms.length === 0) return true;
+  const t = (text ?? '').toLowerCase();
+  return terms.some((term) => t.includes(term));
+}
 
+function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
   switch (node.type) {
     case 'new_dm':
       // from_handles filter — would need lead username; skip for v1
-      return ctx.eventKind === 'dm' && textMatch;
+      return ctx.eventKind === 'dm' && keywordMatches(node, ctx.messageText);
     case 'comment_keyword':
-      return ctx.eventKind === 'comment' && textMatch;
+      return ctx.eventKind === 'comment' && keywordMatches(node, ctx.messageText);
     case 'button_click': {
       if (ctx.eventKind !== 'postback') return false;
       const want = (node.config.payload as string | undefined)?.trim();
@@ -120,8 +136,8 @@ function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
       return !want || want === (ctx.postbackPayload ?? '').trim();
     }
     case 'story_reply':
-      // Story replies arrive as DMs; treat like a DM trigger for now.
-      return ctx.eventKind === 'dm' && textMatch;
+      // Story replies arrive as DMs flagged with isStoryReply.
+      return ctx.eventKind === 'dm' && ctx.isStoryReply === true && keywordMatches(node, ctx.messageText);
     default:
       return false;
   }
@@ -188,6 +204,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
   if (node.kind === 'action') {
     if (node.type === 'send_dm') return actionSendDm(node, ctx);
     if (node.type === 'send_buttons') return actionSendButtons(node, ctx);
+    if (node.type === 'reply_comment') return actionReplyComment(node, ctx);
     if (node.type === 'send_link') return actionSendLink(node, ctx);
     if (node.type === 'add_tag') return actionAddTag(node, ctx);
     if (node.type === 'set_funnel') return actionSetFunnel(node, ctx);
@@ -390,14 +407,48 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
   }
 }
 
+// Pick a message to send: a random variant if any are configured (anti-spam
+// rotation), otherwise the single static text.
+function pickVariant(config: Record<string, unknown>): string {
+  const variants = Array.isArray(config.variants)
+    ? (config.variants as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
+  if (variants.length > 0) return variants[Math.floor(Math.random() * variants.length)].trim();
+  return ((config.text as string | undefined) ?? '').trim();
+}
+
 async function actionSendDm(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
-  const staticText = (node.config.text as string | undefined)?.trim();
-  const text = staticText || ctx.generatedReply;
+  const text = pickVariant(node.config) || ctx.generatedReply;
   if (!text) {
-    console.warn('send_dm: no text to send (no generated reply, no static text)');
+    console.warn('send_dm: no text to send (no variants, no static text, no generated reply)');
     return { proceed: true };
   }
   await sendIgMessage(ctx, { text }, text);
+  return { proceed: true };
+}
+
+// Post a PUBLIC reply to the comment that triggered this run (visible on the
+// post/reel), distinct from the private DM. If the lead does not follow the
+// business, append a "check your message requests" note so they find the DM.
+async function actionReplyComment(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  if (!ctx.commentId) {
+    console.warn('reply_comment: no comment id on this event — skipping');
+    return { proceed: true };
+  }
+  let text = pickVariant(node.config) || ctx.generatedReply || '';
+  if (!text) return { proceed: true };
+  if (ctx.userFollowsBusiness === false) text = `${text} (check your message requests)`;
+  try {
+    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.commentId}/replies`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
+      body: JSON.stringify({ message: text }),
+    });
+    if (!r.ok) console.error('reply_comment meta call failed', r.status, await r.text());
+  } catch (e) {
+    console.error('reply_comment failed', e);
+  }
   return { proceed: true };
 }
 

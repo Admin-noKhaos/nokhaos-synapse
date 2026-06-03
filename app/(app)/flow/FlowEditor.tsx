@@ -37,6 +37,7 @@ const PALETTE = [
   { kind: 'action', items: [
     { type: 'send_dm', label: 'Send DM', icon: <I.Send size={14} />, color: '#DDA0FF' },
     { type: 'send_buttons', label: 'Send DM with buttons', icon: <I.Bolt size={14} />, color: '#DDA0FF' },
+    { type: 'reply_comment', label: 'Reply to comment', icon: <I.Reply size={14} />, color: '#DDA0FF' },
     { type: 'send_link', label: 'Send funnel link', icon: <I.Link size={14} />, color: '#DDA0FF' },
     { type: 'add_tag', label: 'Tag lead', icon: <I.Tag size={14} />, color: '#DDA0FF' },
     { type: 'handoff_human', label: 'Notify human', icon: <I.Bell size={14} />, color: '#DDA0FF' },
@@ -624,7 +625,15 @@ function summarize(n: FlowNode): string {
     return 'fallback';
   }
   if (n.kind === 'action') {
-    if (n.type === 'send_dm') return n.config.text ? '"' + n.config.text.slice(0, 60) + (n.config.text.length > 60 ? '…' : '') + '"' : 'use AI-generated text';
+    if (n.type === 'send_dm') {
+      const vs = (n.config.variants ?? []) as string[];
+      if (vs.length) return `${vs.length} message${vs.length > 1 ? 's' : ''} (rotates)`;
+      return n.config.text ? '"' + n.config.text.slice(0, 60) + (n.config.text.length > 60 ? '…' : '') + '"' : 'use AI-generated text';
+    }
+    if (n.type === 'reply_comment') {
+      const vs = (n.config.variants ?? []) as string[];
+      return vs.length ? `${vs.length} public repl${vs.length > 1 ? 'ies' : 'y'} (rotates)` : 'no replies set';
+    }
     if (n.type === 'send_buttons') {
       const btns = (n.config.buttons ?? []) as FlowButton[];
       return btns.length ? `buttons: ${btns.map((b) => b.title).join(', ')}` : 'no buttons set';
@@ -698,12 +707,15 @@ function Properties({
         </>
       )}
 
-      {node.kind === 'trigger' && node.type === 'comment_keyword' && (
-        <Field label="Comment keyword">
-          <input className="sx-input" placeholder="e.g. WEBINAR" value={node.config.contains ?? ''}
+      {node.kind === 'trigger' && (node.type === 'comment_keyword' || node.type === 'story_reply') && (
+        <Field label="Keywords (comma-separated)">
+          <input className="sx-input" placeholder="e.g. START, VIDEO, TRAINING" value={node.config.contains ?? ''}
                  onChange={(e) => patch({ contains: e.target.value })} />
           <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5 }}>
-            Fires when someone comments this word on any of your posts. Leave blank to match every comment.
+            {node.type === 'comment_keyword'
+              ? 'Fires when a comment on a post or reel contains any of these words.'
+              : 'Fires when a story reply contains any of these words.'}
+            {' '}Case-insensitive. Separate multiple with commas. Leave blank to match all.
           </div>
         </Field>
       )}
@@ -781,9 +793,35 @@ function Properties({
       )}
 
       {node.kind === 'action' && node.type === 'send_dm' && (
-        <Field label="Reply text (leave blank to use AI-generated)">
-          <textarea className="sx-input" style={{ height: 100, paddingTop: 8 }} placeholder="Hi {{name}}! …"
-                    value={node.config.text ?? ''} onChange={(e) => patch({ text: e.target.value })} />
+        <>
+          <Field label="Message variations (rotate, up to 5)">
+            <VariantsEditor
+              variants={(node.config.variants ?? []) as string[]}
+              onChange={(variants) => patch({ variants })}
+              placeholder="Hey! Here's your link 👇"
+              max={5}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.5 }}>
+              Add 2 or more and the bot rotates randomly each send (looks natural, avoids spam flags). Leave empty to use the single reply text below.
+            </div>
+          </Field>
+          <Field label="Reply text (used if no variations, blank = AI-generated)">
+            <textarea className="sx-input" style={{ height: 80, paddingTop: 8 }} placeholder="Hi {{name}}! …"
+                      value={node.config.text ?? ''} onChange={(e) => patch({ text: e.target.value })} />
+          </Field>
+        </>
+      )}
+      {node.kind === 'action' && node.type === 'reply_comment' && (
+        <Field label="Public reply variations (rotate, up to 5)">
+          <VariantsEditor
+            variants={(node.config.variants ?? []) as string[]}
+            onChange={(variants) => patch({ variants })}
+            placeholder="Just sent it to your DMs!"
+            max={5}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.5 }}>
+            Posts a public reply on the comment (one variation chosen at random). If the commenter doesn’t follow the account, “(check your message requests)” is added automatically so they find the DM.
+          </div>
         </Field>
       )}
       {node.kind === 'action' && node.type === 'send_buttons' && (
@@ -851,6 +889,38 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // Auto-derive a stable payload from a button label (e.g. "Send Link" → "SEND_LINK").
 function payloadFromTitle(title: string): string {
   return title.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'BUTTON';
+}
+
+function VariantsEditor({ variants, onChange, placeholder, max = 5 }: { variants: string[]; onChange: (v: string[]) => void; placeholder?: string; max?: number }) {
+  function update(i: number, value: string) {
+    onChange(variants.map((v, idx) => (idx === i ? value : v)));
+  }
+  function remove(i: number) {
+    onChange(variants.filter((_, idx) => idx !== i));
+  }
+  function add() {
+    if (variants.length >= max) return;
+    onChange([...variants, '']);
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {variants.map((v, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 10.5, color: 'var(--text-3)', fontWeight: 600, marginTop: 9, width: 16, flexShrink: 0 }}>{i + 1}</span>
+          <textarea className="sx-input" style={{ height: 54, paddingTop: 8, flex: 1 }} placeholder={placeholder}
+                    value={v} onChange={(e) => update(i, e.target.value)} />
+          <button onClick={() => remove(i)} title="Remove" style={{ background: 'transparent', border: 0, color: 'var(--text-3)', cursor: 'pointer', padding: 2, marginTop: 7 }}>
+            <I.X size={12} />
+          </button>
+        </div>
+      ))}
+      {variants.length < max && (
+        <Button kind="default" size="sm" onClick={add} style={{ justifyContent: 'center' }}>
+          <I.Plus size={12} /> Add variation ({variants.length}/{max})
+        </Button>
+      )}
+    </div>
+  );
 }
 
 function ButtonsEditor({ buttons, onChange }: { buttons: FlowButton[]; onChange: (b: FlowButton[]) => void }) {

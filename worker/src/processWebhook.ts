@@ -15,7 +15,8 @@ import { workerCall } from './anthropic.js';
 
 type Sender = { id?: string };
 type IgQuickReply = { payload?: string };
-type IgMessage = { mid?: string; text?: string; is_echo?: boolean; attachments?: unknown[]; quick_reply?: IgQuickReply };
+type IgReplyTo = { story?: { id?: string; url?: string }; mid?: string };
+type IgMessage = { mid?: string; text?: string; is_echo?: boolean; attachments?: unknown[]; quick_reply?: IgQuickReply; reply_to?: IgReplyTo };
 type IgPostback = { mid?: string; title?: string; payload?: string };
 
 /** A single inbound event normalised across Instagram's webhook shapes.
@@ -30,6 +31,7 @@ type Normalized = {
   mid?: string;          // message id / comment id — used for dedupe
   postbackPayload?: string;
   commentId?: string;
+  isStoryReply?: boolean; // DM that is a reply to one of our stories
   username?: string;     // commenter username when provided
   timestamp: number;
   /** Diagnostic: what shape this came from. */
@@ -121,6 +123,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
           kind: 'dm', shape: 'changes', pageOrAccountId: accountId,
           userId: v.sender.id, recipientId: v.recipient?.id ?? '',
           text: v.message.text, mid: v.message.mid,
+          isStoryReply: !!v.message.reply_to?.story,
           timestamp: toMs(v.timestamp ?? entryTime),
         });
       }
@@ -161,6 +164,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
           kind: 'dm', shape: 'messaging', pageOrAccountId: accountId,
           userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
           text: ev.message.text, mid: ev.message.mid,
+          isStoryReply: !!ev.message.reply_to?.story,
           timestamp: toMs(ev.timestamp ?? Date.now()),
         });
       }
@@ -431,6 +435,25 @@ async function handleEvent(ev: Normalized) {
     log('classify failed', e instanceof Error ? e.message : String(e));
   }
 
+  // For comment events, find out if the commenter follows the business. This decides
+  // whether a public comment reply should add a "check your message requests" note.
+  let userFollowsBusiness: boolean | undefined = undefined;
+  if (ev.kind === 'comment' && account.access_token) {
+    try {
+      const url = new URL(`https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${senderIgId}`);
+      url.searchParams.set('fields', 'is_user_follow_business');
+      url.searchParams.set('access_token', account.access_token);
+      const r = await fetch(url);
+      if (r.ok) {
+        const j = await r.json() as { is_user_follow_business?: boolean };
+        userFollowsBusiness = j.is_user_follow_business;
+        log(`follows_business=${userFollowsBusiness}`);
+      }
+    } catch (e) {
+      log('follow-status fetch failed', e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // ─── Run live automations (skipped once handed off to a human) ─────────────
   if (handoff) {
     log('conversation handed off — skipping automations / auto-reply');
@@ -451,6 +474,8 @@ async function handleEvent(ev: Normalized) {
       postbackPayload: ev.postbackPayload,
       commentId: ev.commentId,
       isFirstContact,
+      isStoryReply: ev.isStoryReply,
+      userFollowsBusiness,
     });
     log('automation run complete');
   } catch (e) {

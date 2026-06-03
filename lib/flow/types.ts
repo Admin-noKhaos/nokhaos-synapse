@@ -6,7 +6,7 @@ export type NodeKind = 'trigger' | 'ai' | 'condition' | 'action';
 export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply' | 'button_click';
 export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag';
 export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'if_first_contact' | 'if_returning' | 'else';
-export type ActionType = 'send_dm' | 'send_buttons' | 'send_link' | 'add_tag' | 'set_funnel' | 'handoff_human';
+export type ActionType = 'send_dm' | 'send_buttons' | 'reply_comment' | 'send_link' | 'add_tag' | 'set_funnel' | 'handoff_human';
 
 /** A tappable button attached to a send_buttons message. Tapping it sends the
  *  title back as the lead's reply and fires `payload` as a button_click event. */
@@ -39,7 +39,8 @@ export type FlowNode =
     };
 
 export type TriggerConfig = {
-  /** Optional substring filter on inbound text (new_dm, comment_keyword). Empty = match all. */
+  /** Substring filter on inbound text. Comma-separated = match if ANY term is present
+   *  (e.g. "START, VIDEO, TRAINING"). Case-insensitive. Empty = match all. */
   contains?: string;
   /** Optional comma-separated list of IG handles to limit to. */
   from_handles?: string;
@@ -74,6 +75,9 @@ export type ConditionConfig = {
 export type ActionConfig = {
   /** Static text for send_dm / send_buttons; supports {{var}} interpolation from run context. */
   text?: string;
+  /** Message variations for send_dm / reply_comment. One is picked at random each send
+   *  (anti-spam rotation). Up to 5. Takes precedence over `text` when non-empty. */
+  variants?: string[];
   /** Tappable buttons for send_buttons (rendered as Instagram quick replies). */
   buttons?: FlowButton[];
   /** Smart link slug for send_link. */
@@ -138,7 +142,9 @@ export function defaultNode(kind: NodeKind, type: string, position: { x: number;
           ? { text: '' }
           : type === 'send_buttons'
             ? { text: '', buttons: [{ title: 'Send Link', payload: 'SEND_LINK' }] }
-            : type === 'add_tag' ? { tag: 'interested' } : {},
+            : type === 'reply_comment'
+              ? { variants: ['Just sent it to your DMs!'] }
+              : type === 'add_tag' ? { tag: 'interested' } : {},
       };
   }
 }
@@ -153,7 +159,7 @@ function conditionLabel(t: ConditionType) {
   return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', if_first_contact: 'If first message', if_returning: 'If returning lead', else: 'Else' }[t];
 }
 function actionLabel(t: ActionType) {
-  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', send_link: 'Send funnel link', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
+  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', reply_comment: 'Reply to comment', send_link: 'Send funnel link', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
 }
 
 // ─── Default templates (used by the "Create from template" empty-state) ────
