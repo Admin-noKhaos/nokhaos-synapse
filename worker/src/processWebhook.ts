@@ -35,8 +35,9 @@ type Normalized = {
   isStoryReply?: boolean; // DM that is a reply to one of our stories
   username?: string;     // commenter username when provided
   timestamp: number;
-  /** Diagnostic: what shape this came from. */
-  shape: 'changes' | 'messaging';
+  /** Diagnostic: what shape this came from. 'standby' = handover protocol secondary
+   *  delivery (we process it the same as 'messaging'). */
+  shape: 'changes' | 'messaging' | 'standby';
 };
 
 type CommentFrom = { id?: string; username?: string };
@@ -52,7 +53,7 @@ type Messaging = {
   reaction?: unknown;
   read?: unknown;
 };
-type Entry = { id?: string; time?: number; changes?: Change[]; messaging?: Messaging[] };
+type Entry = { id?: string; time?: number; changes?: Change[]; messaging?: Messaging[]; standby?: Messaging[] };
 type Payload = { object?: string; entry?: Entry[] };
 
 function log(...args: unknown[]) {
@@ -130,49 +131,55 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
         });
       }
     }
-    if (Array.isArray(entry.messaging)) {
-      for (const ev of entry.messaging) {
-        if (ev.message_edit) { skipped.push('messaging.message_edit'); continue; }
-        if (ev.reaction)    { skipped.push('messaging.reaction'); continue; }
-        if (ev.read)        { skipped.push('messaging.read'); continue; }
-        if (!ev.sender?.id) { skipped.push('messaging.no_sender'); continue; }
-
-        // Button tap (postback)
-        if (ev.postback) {
-          events.push({
-            kind: 'postback', shape: 'messaging', pageOrAccountId: accountId,
-            userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
-            text: ev.postback.title ?? '', mid: ev.postback.mid,
-            postbackPayload: ev.postback.payload ?? '',
-            timestamp: toMs(ev.timestamp ?? Date.now()),
-          });
-          continue;
-        }
-
-        if (ev.message?.is_echo) { skipped.push('messaging.echo'); continue; }
-        // Tapped quick-reply → button tap (carries quick_reply.payload).
-        if (ev.message?.quick_reply?.payload) {
-          events.push({
-            kind: 'postback', shape: 'messaging', pageOrAccountId: accountId,
-            userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
-            text: ev.message.text ?? '', mid: ev.message.mid,
-            postbackPayload: ev.message.quick_reply.payload,
-            timestamp: toMs(ev.timestamp ?? Date.now()),
-          });
-          continue;
-        }
-        if (!ev.message?.text) { skipped.push('messaging.no_text'); continue; }
-        events.push({
-          kind: 'dm', shape: 'messaging', pageOrAccountId: accountId,
-          userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
-          text: ev.message.text, mid: ev.message.mid,
-          isStoryReply: !!ev.message.reply_to?.story,
-          timestamp: toMs(ev.timestamp ?? Date.now()),
-        });
-      }
-    }
+    // 'messaging' = we are the primary receiver. 'standby' = handover-protocol
+    // secondary delivery (another app / the IG inbox held the thread). We process
+    // both identically so DMs and story replies fire even when delivered via standby.
+    if (Array.isArray(entry.messaging)) collectMessaging(entry.messaging, accountId, 'messaging', events, skipped);
+    if (Array.isArray(entry.standby)) collectMessaging(entry.standby, accountId, 'standby', events, skipped);
   }
   return { events, skipped };
+}
+
+function collectMessaging(list: Messaging[], accountId: string, shape: 'messaging' | 'standby', events: Normalized[], skipped: string[]) {
+  for (const ev of list) {
+    if (ev.message_edit) { skipped.push(`${shape}.message_edit`); continue; }
+    if (ev.reaction)    { skipped.push(`${shape}.reaction`); continue; }
+    if (ev.read)        { skipped.push(`${shape}.read`); continue; }
+    if (!ev.sender?.id) { skipped.push(`${shape}.no_sender`); continue; }
+
+    // Button tap (postback)
+    if (ev.postback) {
+      events.push({
+        kind: 'postback', shape, pageOrAccountId: accountId,
+        userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
+        text: ev.postback.title ?? '', mid: ev.postback.mid,
+        postbackPayload: ev.postback.payload ?? '',
+        timestamp: toMs(ev.timestamp ?? Date.now()),
+      });
+      continue;
+    }
+
+    if (ev.message?.is_echo) { skipped.push(`${shape}.echo`); continue; }
+    // Tapped quick-reply → button tap (carries quick_reply.payload).
+    if (ev.message?.quick_reply?.payload) {
+      events.push({
+        kind: 'postback', shape, pageOrAccountId: accountId,
+        userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
+        text: ev.message.text ?? '', mid: ev.message.mid,
+        postbackPayload: ev.message.quick_reply.payload,
+        timestamp: toMs(ev.timestamp ?? Date.now()),
+      });
+      continue;
+    }
+    if (!ev.message?.text) { skipped.push(`${shape}.no_text`); continue; }
+    events.push({
+      kind: 'dm', shape, pageOrAccountId: accountId,
+      userId: ev.sender.id, recipientId: ev.recipient?.id ?? '',
+      text: ev.message.text, mid: ev.message.mid,
+      isStoryReply: !!ev.message.reply_to?.story,
+      timestamp: toMs(ev.timestamp ?? Date.now()),
+    });
+  }
 }
 
 export async function processWebhookEvent(row: { id: string; payload: Payload }): Promise<void> {
