@@ -114,15 +114,19 @@ async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string,
 }
 
 // Keyword filter. `contains` may be a single term or comma-separated terms
-// ("START, VIDEO, TRAINING") — matches if ANY term appears (case-insensitive).
-// Empty = match all.
+// ("START, VIDEO, TRAINING") — matches if ANY term appears as a WHOLE WORD
+// (case-insensitive), so "AI" matches "AI" but not "again" or "email".
+// Punctuation around the word is fine (word boundaries). Empty = match all.
 function keywordMatches(node: FlowNode, text: string): boolean {
   const raw = (node.config.contains as string | undefined)?.trim();
   if (!raw) return true;
   const terms = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   if (terms.length === 0) return true;
   const t = (text ?? '').toLowerCase();
-  return terms.some((term) => t.includes(term));
+  return terms.some((term) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`).test(t);
+  });
 }
 
 function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
