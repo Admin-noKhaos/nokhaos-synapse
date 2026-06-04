@@ -22,7 +22,7 @@ type IgPostback = { mid?: string; title?: string; payload?: string };
 /** A single inbound event normalised across Instagram's webhook shapes.
  *  kind 'dm' = a direct message, 'comment' = a post/reel comment,
  *  'postback' = the lead tapped a button we sent. */
-type Normalized = {
+export type Normalized = {
   kind: 'dm' | 'comment' | 'postback';
   pageOrAccountId: string;
   userId: string;        // the lead: DM/postback sender id, or commenter from.id
@@ -207,7 +207,7 @@ async function markProcessed(id: string, error: string | null) {
   await db.from('webhook_events').update({ processed_at: new Date().toISOString(), error }).eq('id', id);
 }
 
-async function handleEvent(ev: Normalized) {
+export async function handleEvent(ev: Normalized) {
   const senderIgId = ev.userId;
   const recipientId = ev.recipientId;
   const accountId = ev.pageOrAccountId;

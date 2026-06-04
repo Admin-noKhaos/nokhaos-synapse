@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { ENV } from './env.js';
 import { db } from './db.js';
 import { processWebhookEvent } from './processWebhook.js';
+import { pollComments } from './commentPoller.js';
 
 let processing = false;
 
@@ -46,6 +47,17 @@ async function tick() {
 
 setInterval(tick, ENV.POLL_INTERVAL_MS).unref();
 tick();
+
+// Slower comment-polling backstop for posts Instagram never webhooks.
+async function commentTick() {
+  try {
+    await pollComments();
+  } catch (e) {
+    console.error('[comment-poll] tick threw', e);
+  }
+}
+setInterval(commentTick, ENV.COMMENT_POLL_INTERVAL_MS).unref();
+commentTick();
 
 createServer((req, res) => {
   if (req.url === '/health') {
