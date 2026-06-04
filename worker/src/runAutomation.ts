@@ -59,6 +59,11 @@ type RunContext = {
    *  leads get a normal AI reply instead of re-running it. */
   isFirstContact: boolean;
 
+  // Send bookkeeping: whether a DM was attempted this run and whether it landed.
+  // A public comment reply ("check your DMs") is skipped if the DM didn't send.
+  dmAttempted?: boolean;
+  dmOk?: boolean;
+
   // Filled by AI/condition nodes
   intent?: string;
   intentConfidence?: number;
@@ -407,6 +412,8 @@ async function takeThreadControl(ctx: RunContext): Promise<boolean> {
 }
 
 async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
+  ctx.dmAttempted = true;
+  ctx.dmOk = false;
   const recipient = ctx.eventKind === 'comment' && ctx.commentId
     ? { comment_id: ctx.commentId }
     : { id: ctx.leadIgUserId };
@@ -433,6 +440,7 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
         return;
       }
     }
+    ctx.dmOk = true;
     const j = await r.json() as { message_id?: string };
 
     await db.from('messages').insert({
@@ -480,6 +488,12 @@ async function actionSendDm(node: FlowNode, ctx: RunContext): Promise<{ proceed:
 async function actionReplyComment(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
   if (!ctx.commentId) {
     console.warn('reply_comment: no comment id on this event — skipping');
+    return { proceed: true };
+  }
+  // Don't post a public "check your DMs" reply if we tried to DM and it failed —
+  // otherwise we tell people to check a DM that never arrived.
+  if (ctx.dmAttempted && ctx.dmOk === false) {
+    console.warn('reply_comment: skipped — the DM did not send, so no public reply');
     return { proceed: true };
   }
   let text = pickVariant(node.config) || ctx.generatedReply || '';
