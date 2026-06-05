@@ -111,9 +111,31 @@ export async function pollComments(): Promise<void> {
         .eq('org_id', acct.org_id)
         .in('ig_message_id', ids);
       const seen = new Set((existing ?? []).map((r) => r.ig_message_id as string));
+      const notIngested = candidates.filter((x) => !seen.has(x.c.id));
 
-      const fresh = candidates.filter((x) => !seen.has(x.c.id));
-      if (fresh.length > 0) log(`@${igId}: ${fresh.length} missed keyword comment(s) to backfill`);
+      // Per-person dedup: the poller must never message the same person more than
+      // once during a backfill. Skip anyone we've already seen (handled by a
+      // webhook or an earlier poll = already a lead), and keep at most one comment
+      // per person this cycle (even if they commented the keyword multiple times
+      // or on several posts).
+      const fromIds = [...new Set(notIngested.map((x) => x.c.from!.id!))];
+      let knownPeople = new Set<string>();
+      if (fromIds.length > 0) {
+        const { data: leads } = await db
+          .from('leads')
+          .select('ig_user_id')
+          .eq('org_id', acct.org_id)
+          .in('ig_user_id', fromIds);
+        knownPeople = new Set((leads ?? []).map((r) => r.ig_user_id as string));
+      }
+      const perPerson = new Set<string>();
+      const fresh = notIngested.filter((x) => {
+        const uid = x.c.from!.id!;
+        if (knownPeople.has(uid) || perPerson.has(uid)) return false;
+        perPerson.add(uid);
+        return true;
+      });
+      if (fresh.length > 0) log(`@${igId}: ${fresh.length} new person(s) to backfill (one message each)`);
 
       for (const { c, mediaType } of fresh) {
         if (handledThisCycle >= ENV.COMMENT_POLL_MAX_PER_CYCLE) break;
