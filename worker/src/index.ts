@@ -6,6 +6,7 @@ import { ENV } from './env.js';
 import { db } from './db.js';
 import { processWebhookEvent } from './processWebhook.js';
 import { pollComments } from './commentPoller.js';
+import { runDueFollowups } from './followupRunner.js';
 
 let processing = false;
 
@@ -58,6 +59,17 @@ async function commentTick() {
 }
 setInterval(commentTick, ENV.COMMENT_POLL_INTERVAL_MS).unref();
 commentTick();
+
+// Fire due scheduled follow-ups (checks every minute).
+async function followupTick() {
+  try {
+    await runDueFollowups();
+  } catch (e) {
+    console.error('[followup] tick threw', e);
+  }
+}
+setInterval(followupTick, 60_000).unref();
+followupTick();
 
 createServer((req, res) => {
   if (req.url === '/health') {

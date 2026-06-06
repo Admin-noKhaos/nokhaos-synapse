@@ -6,7 +6,7 @@ export type NodeKind = 'trigger' | 'ai' | 'condition' | 'action';
 export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply' | 'button_click';
 export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag';
 export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'if_first_contact' | 'if_returning' | 'else';
-export type ActionType = 'send_dm' | 'send_buttons' | 'reply_comment' | 'send_link' | 'add_tag' | 'set_funnel' | 'handoff_human';
+export type ActionType = 'send_dm' | 'send_buttons' | 'reply_comment' | 'send_link' | 'follow_up' | 'add_tag' | 'set_funnel' | 'handoff_human';
 
 /** A tappable button attached to a send_buttons message. Tapping it sends the
  *  title back as the lead's reply and fires `payload` as a button_click event. */
@@ -91,6 +91,13 @@ export type ActionConfig = {
   funnel?: string;
   /** Slack channel / email for handoff. */
   notify?: string;
+  /** For follow_up: hours after the last message to send each nudge (e.g. [2,6,12]).
+   *  Each fires only if the lead hasn't replied; the sequence stops once they do. */
+  delays_hours?: number[];
+  /** For follow_up (and reused by AI nodes): the goal/instruction for the message. */
+  goal?: string;
+  /** For follow_up: include the master doc when AI-generating the nudge (default true). */
+  use_master_doc?: boolean;
 };
 
 /**
@@ -147,7 +154,9 @@ export function defaultNode(kind: NodeKind, type: string, position: { x: number;
             ? { text: '', buttons: [{ title: 'Send Link', payload: 'SEND_LINK' }] }
             : type === 'reply_comment'
               ? { variants: ['Just sent it to your DMs!'] }
-              : type === 'add_tag' ? { tag: 'interested' } : {},
+              : type === 'follow_up'
+                ? { delays_hours: [2, 6, 12], goal: 'They went quiet after your last message. Send a short, friendly nudge to re-engage. Do not be pushy.', use_master_doc: true }
+                : type === 'add_tag' ? { tag: 'interested' } : {},
       };
   }
 }
@@ -162,7 +171,7 @@ function conditionLabel(t: ConditionType) {
   return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', if_first_contact: 'If first message', if_returning: 'If returning lead', else: 'Else' }[t];
 }
 function actionLabel(t: ActionType) {
-  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', reply_comment: 'Reply to comment', send_link: 'Send funnel link', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
+  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', reply_comment: 'Reply to comment', send_link: 'Send funnel link', follow_up: 'Follow up later', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
 }
 
 // ─── Default templates (used by the "Create from template" empty-state) ────

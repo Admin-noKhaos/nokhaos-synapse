@@ -8,6 +8,7 @@
 //   - Action nodes have side effects (send DM via Meta, tag lead, set funnel,
 //     mark conversation for human handoff)
 
+import { randomUUID } from 'node:crypto';
 import { db } from './db.js';
 import { ENV } from './env.js';
 import { workerCall } from './anthropic.js';
@@ -222,6 +223,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
     if (node.type === 'send_dm') return actionSendDm(node, ctx);
     if (node.type === 'send_buttons') return actionSendButtons(node, ctx);
     if (node.type === 'reply_comment') return actionReplyComment(node, ctx);
+    if (node.type === 'follow_up') return actionFollowUp(node, ctx);
     if (node.type === 'send_link') return actionSendLink(node, ctx);
     if (node.type === 'add_tag') return actionAddTag(node, ctx);
     if (node.type === 'set_funnel') return actionSetFunnel(node, ctx);
@@ -237,7 +239,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
 //  - capitalize the first letter of the message
 // Keep in sync with lib/text.ts sanitizeReply.
 const NEUTRAL_TERM = 'friend';
-function sanitizeReply(s: string): string {
+export function sanitizeReply(s: string): string {
   let out = s
     .replace(/\s*[—–]\s*/g, (m) => (/\s/.test(m) ? '. ' : '-'))
     .replace(/\bbro\b/gi, NEUTRAL_TERM)
@@ -547,6 +549,52 @@ async function actionSendLink(node: FlowNode, ctx: RunContext): Promise<{ procee
     ? `${ctx.generatedReply} ${baseUrl}/l/${slug}`
     : `${baseUrl}/l/${slug}`;
   await sendIgMessage(ctx, { text }, text);
+  return { proceed: true };
+}
+
+// Schedule a sequence of timed follow-up nudges. Each fires later ONLY if the
+// lead hasn't replied since now (the followupRunner enforces that at send time).
+// Re-running this (e.g. the lead replied, flow ran again) cancels the old pending
+// sequence first, so the clock resets to the latest message.
+async function actionFollowUp(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  const delays = Array.isArray(node.config.delays_hours)
+    ? (node.config.delays_hours as unknown[]).map(Number).filter((h) => Number.isFinite(h) && h > 0)
+    : [];
+  if (delays.length === 0) return { proceed: true };
+
+  const variants = Array.isArray(node.config.variants)
+    ? (node.config.variants as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
+  const mode = variants.length > 0 ? 'static' : 'ai';
+  const goal = (node.config.goal as string | undefined) ?? '';
+  const useMasterDoc = node.config.use_master_doc !== false;
+
+  // Cancel any still-pending follow-ups for this conversation (reset the clock).
+  await db.from('scheduled_followups')
+    .update({ status: 'cancelled' })
+    .eq('conversation_id', ctx.conversationId)
+    .eq('status', 'pending');
+
+  const now = Date.now();
+  const sequenceId = randomUUID();
+  const rows = delays.map((h, i) => ({
+    org_id: ctx.orgId,
+    conversation_id: ctx.conversationId,
+    account_id: ctx.accountId,
+    lead_ig_user_id: ctx.leadIgUserId,
+    sequence_id: sequenceId,
+    step: i,
+    due_at: new Date(now + h * 3_600_000).toISOString(),
+    reference_at: new Date(now).toISOString(),
+    mode,
+    goal: goal || null,
+    variants: variants.length ? variants : null,
+    use_master_doc: useMasterDoc,
+    status: 'pending',
+  }));
+  const { error } = await db.from('scheduled_followups').insert(rows);
+  if (error) console.error('follow_up: schedule failed', error.message);
+  else console.log(`follow_up: scheduled ${rows.length} nudge(s) at +${delays.join('h, +')}h`);
   return { proceed: true };
 }
 
