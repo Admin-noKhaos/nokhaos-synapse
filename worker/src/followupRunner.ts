@@ -60,10 +60,12 @@ async function processFollowup(row: FollowupRow): Promise<void> {
 
   const { data: acct } = await db
     .from('meta_accounts')
-    .select('ig_user_id, access_token, username')
+    .select('ig_user_id, page_id, platform, access_token, username')
     .eq('id', row.account_id ?? '')
     .maybeSingle();
-  if (!acct?.access_token || !acct.ig_user_id) {
+  // Facebook pages send through page_id; Instagram through ig_user_id.
+  const hostId = acct?.platform === 'facebook' ? acct.page_id : acct?.ig_user_id;
+  if (!acct?.access_token || !hostId) {
     await db.from('scheduled_followups').update({ status: 'cancelled' }).eq('id', row.id);
     log(`row ${row.id.slice(0, 8)}: no connected account — cancelled`);
     return;
@@ -74,7 +76,8 @@ async function processFollowup(row: FollowupRow): Promise<void> {
     : await generateFollowup(row, acct.username ?? null);
   if (!text) { await mark(row.id, 'cancelled'); return; }
 
-  const ok = await sendDm(acct.ig_user_id, acct.access_token, row.lead_ig_user_id, text);
+  const host = acct.platform === 'facebook' ? 'graph.facebook.com' : 'graph.instagram.com';
+  const ok = await sendDm(host, hostId, acct.access_token, row.lead_ig_user_id, text);
   if (ok) {
     await db.from('messages').insert({
       org_id: row.org_id, conversation_id: row.conversation_id,
@@ -135,9 +138,9 @@ async function generateFollowup(row: FollowupRow, username: string | null): Prom
   }
 }
 
-async function sendDm(igUserId: string, token: string, recipientId: string, text: string): Promise<boolean> {
+async function sendDm(host: string, hostId: string, token: string, recipientId: string, text: string): Promise<boolean> {
   try {
-    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${igUserId}/messages`;
+    const url = `https://${host}/${ENV.META_GRAPH_VERSION}/${hostId}/messages`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
