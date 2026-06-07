@@ -34,6 +34,11 @@ type RunContext = {
   accountIgUserId: string;
   accountToken: string;
   accountUsername: string | null;
+  /** 'instagram' (Instagram Login) or 'facebook' (Facebook Page connect). Decides
+   *  which Graph host + id we send through. Defaults to instagram. */
+  accountPlatform?: string;
+  /** Facebook Page id — present for platform 'facebook'; send target host id. */
+  accountPageId?: string | null;
   leadIgUserId: string;
   messageText: string;
   transcript: string;
@@ -393,9 +398,18 @@ type IgMessagePayload = { text?: string; quick_replies?: IgQuickReply[] };
 // Take over the conversation thread from the Instagram inbox / another app, so we
 // can send. Needed when a message arrived via the handover-protocol standby channel
 // (we're not the thread owner). Best-effort: returns true if control was taken.
+// Base Graph URL for sending. Facebook Page connections send through
+// graph.facebook.com/{page_id}; Instagram Login through graph.instagram.com/{ig_user_id}.
+function sendBase(ctx: RunContext): string {
+  if (ctx.accountPlatform === 'facebook' && ctx.accountPageId) {
+    return `https://graph.facebook.com/${ENV.META_GRAPH_VERSION}/${ctx.accountPageId}`;
+  }
+  return `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}`;
+}
+
 async function takeThreadControl(ctx: RunContext): Promise<boolean> {
   try {
-    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}/take_thread_control`;
+    const url = `${sendBase(ctx)}/take_thread_control`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
@@ -419,7 +433,7 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
   const recipient = ctx.eventKind === 'comment' && ctx.commentId
     ? { comment_id: ctx.commentId }
     : { id: ctx.leadIgUserId };
-  const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}/messages`;
+  const url = `${sendBase(ctx)}/messages`;
   const post = () => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
@@ -502,7 +516,10 @@ async function actionReplyComment(node: FlowNode, ctx: RunContext): Promise<{ pr
   if (!text) return { proceed: true };
   if (ctx.userFollowsBusiness === false) text = `${text} (check your message requests)`;
   try {
-    const url = `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.commentId}/replies`;
+    // IG public comment replies: POST /{comment-id}/replies. Facebook: POST /{comment-id}/comments.
+    const url = ctx.accountPlatform === 'facebook'
+      ? `https://graph.facebook.com/${ENV.META_GRAPH_VERSION}/${ctx.commentId}/comments`
+      : `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.commentId}/replies`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },

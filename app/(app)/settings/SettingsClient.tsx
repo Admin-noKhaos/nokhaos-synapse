@@ -31,8 +31,8 @@ export function SettingsClient(props: {
     orgName: string; orgPlan: string; orgRole: string; followers: number;
     balanceUsd: number; brain: string;
   };
-  flags: { meta: boolean; anthropic: boolean; service_role: boolean };
-  metaAccounts: { id: string; username: string | null; page_name: string | null; status: string; webhook_subscribed: boolean; account_type: string | null }[];
+  flags: { meta: boolean; fb: boolean; anthropic: boolean; service_role: boolean };
+  metaAccounts: { id: string; platform: string; username: string | null; page_name: string | null; status: string; webhook_subscribed: boolean; account_type: string | null }[];
   ledger: { id: string; kind: string; amount_usd: number; description: string | null; created_at: string }[];
   testers: Tester[];
   dmTarget: string | null;
@@ -85,7 +85,7 @@ export function SettingsClient(props: {
         </div>
       </div>
 
-      {props.meta_connected_flash && <div className="alert success"><I.Check size={14} /> Instagram connected.</div>}
+      {props.meta_connected_flash && <div className="alert success"><I.Check size={14} /> Account connected.</div>}
       {props.meta_error && <div className="alert error"><I.X size={14} /> Meta: {props.meta_error}</div>}
 
       <div className="stg-grid">
@@ -269,12 +269,15 @@ function TestersTab({ testers, dmTarget, canEdit }: { testers: Tester[]; dmTarge
   );
 }
 
-function ConnectionsTab({ metaAccounts, flags }: { metaAccounts: { id: string; username: string | null; page_name: string | null; status: string; webhook_subscribed: boolean; account_type: string | null }[]; flags: { meta: boolean; anthropic: boolean } }) {
+function ConnectionsTab({ metaAccounts, flags }: { metaAccounts: { id: string; platform: string; username: string | null; page_name: string | null; status: string; webhook_subscribed: boolean; account_type: string | null }[]; flags: { meta: boolean; fb: boolean; anthropic: boolean } }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
 
-  async function disconnect(id: string) {
-    if (!confirm('Disconnect this Instagram account?')) return;
+  const igAccounts = metaAccounts.filter((a) => a.platform !== 'facebook');
+  const fbAccounts = metaAccounts.filter((a) => a.platform === 'facebook');
+
+  async function disconnect(id: string, kind: string) {
+    if (!confirm(`Disconnect this ${kind}?`)) return;
     setBusy(id);
     const r = await fetch('/api/meta/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
     setBusy(null);
@@ -284,16 +287,16 @@ function ConnectionsTab({ metaAccounts, flags }: { metaAccounts: { id: string; u
   return (
     <>
       <Card>
-        <CardHeader title="Instagram" sub="Connected accounts via Instagram Login" right={metaAccounts.length ? <Pill tone="green" dot>{metaAccounts.length} connected</Pill> : <Pill tone="cold">Not connected</Pill>} />
+        <CardHeader title="Instagram" sub="Connected accounts via Instagram Login" right={igAccounts.length ? <Pill tone="green" dot>{igAccounts.length} connected</Pill> : <Pill tone="cold">Not connected</Pill>} />
         <CardBody>
           {!flags.meta && <div className="alert warn"><I.Bolt size={14} />Meta App not configured. See <code>docs/meta-app-setup.md</code>.</div>}
-          {metaAccounts.length === 0 ? (
+          {igAccounts.length === 0 ? (
             <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 12.5 }}>
               <Link href="/api/meta/oauth"><Button kind="primary" size="sm" icon={<I.Sparkle size={13} />} type="button">Connect Instagram</Button></Link>
             </div>
           ) : (
             <>
-              {metaAccounts.map((a) => (
+              {igAccounts.map((a) => (
                 <div key={a.id} className="row">
                   <Avatar name={a.username || 'IG'} size={32} />
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -301,11 +304,42 @@ function ConnectionsTab({ metaAccounts, flags }: { metaAccounts: { id: string; u
                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{a.account_type ?? a.page_name ?? '—'} · webhooks {a.webhook_subscribed ? 'on' : 'off'}</div>
                   </div>
                   <Pill tone={a.status === 'active' ? 'green' : 'warm'} dot={a.status === 'active'}>{a.status}</Pill>
-                  <Button kind="ghost" size="sm" disabled={busy === a.id} onClick={() => disconnect(a.id)} title="Disconnect"><I.X size={13} /></Button>
+                  <Button kind="ghost" size="sm" disabled={busy === a.id} onClick={() => disconnect(a.id, 'Instagram account')} title="Disconnect"><I.X size={13} /></Button>
                 </div>
               ))}
               <div style={{ marginTop: 12 }}>
                 <Link href="/api/meta/oauth"><Button kind="default" size="sm" icon={<I.Plus size={13} />} type="button">Connect another</Button></Link>
+              </div>
+            </>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card style={{ marginTop: 12 }}>
+        <CardHeader title="Facebook Pages" sub="Page DMs + comments via Facebook Login (owns the message thread)" right={fbAccounts.length ? <Pill tone="green" dot>{fbAccounts.length} connected</Pill> : <Pill tone="cold">Not connected</Pill>} />
+        <CardBody>
+          {!flags.fb && <div className="alert warn"><I.Bolt size={14} />Facebook app not configured. Set <code>META_FB_APP_ID</code> / <code>META_FB_APP_SECRET</code>. See <code>docs/facebook-app-setup.md</code>.</div>}
+          {fbAccounts.length === 0 ? (
+            <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 12.5 }}>
+              {flags.fb
+                ? <Link href="/api/meta/fb/oauth"><Button kind="primary" size="sm" icon={<I.Link size={13} />} type="button">Connect Facebook Page</Button></Link>
+                : <span>Add the Facebook app env vars to enable Page connections.</span>}
+            </div>
+          ) : (
+            <>
+              {fbAccounts.map((a) => (
+                <div key={a.id} className="row">
+                  <Avatar name={a.page_name || a.username || 'FB'} size={32} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{a.page_name ?? a.username ?? '—'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{a.username ? `linked IG @${a.username}` : 'Page'} · webhooks {a.webhook_subscribed ? 'on' : 'off'}</div>
+                  </div>
+                  <Pill tone={a.status === 'active' ? 'green' : 'warm'} dot={a.status === 'active'}>{a.status}</Pill>
+                  <Button kind="ghost" size="sm" disabled={busy === a.id} onClick={() => disconnect(a.id, 'Facebook Page')} title="Disconnect"><I.X size={13} /></Button>
+                </div>
+              ))}
+              <div style={{ marginTop: 12 }}>
+                <Link href="/api/meta/fb/oauth"><Button kind="default" size="sm" icon={<I.Plus size={13} />} type="button">Connect another</Button></Link>
               </div>
             </>
           )}

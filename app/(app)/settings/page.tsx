@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentSession } from '@/lib/auth';
 import { getSupabaseServer } from '@/lib/supabase/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
-import { metaConfigured, anthropicConfigured, serviceRoleConfigured } from '@/lib/env';
+import { metaConfigured, fbConfigured, anthropicConfigured, serviceRoleConfigured } from '@/lib/env';
 import { SettingsClient } from './SettingsClient';
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
@@ -13,7 +13,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const supabase = await getSupabaseServer();
   const { data: metaAccounts } = await supabase
     .from('meta_accounts')
-    .select('id, username, page_name, status, webhook_subscribed, connected_at, meta')
+    .select('id, platform, username, page_name, status, webhook_subscribed, connected_at, meta')
     .eq('org_id', session.org.id)
     .order('connected_at', { ascending: false });
 
@@ -35,7 +35,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   return (
     <SettingsClient
       initialTab={params.tab ?? 'account'}
-      meta_connected_flash={params.meta_connected === '1'}
+      meta_connected_flash={!!params.meta_connected}
       meta_error={params.meta_error ?? null}
       session={{
         userName: session.user.full_name || session.user.email,
@@ -47,9 +47,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         balanceUsd: session.balance_usd,
         brain: session.org.brain_md,
       }}
-      flags={{ meta: metaConfigured(), anthropic: anthropicConfigured(), service_role: serviceRoleConfigured() }}
+      flags={{ meta: metaConfigured(), fb: fbConfigured(), anthropic: anthropicConfigured(), service_role: serviceRoleConfigured() }}
       metaAccounts={(metaAccounts ?? []).map((a) => ({
         id: a.id,
+        platform: a.platform,
         username: a.username,
         page_name: a.page_name,
         status: a.status,

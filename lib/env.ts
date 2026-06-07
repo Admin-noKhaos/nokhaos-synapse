@@ -23,6 +23,10 @@ const ServerSchema = z.object({
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
   META_APP_ID: optStr,
   META_APP_SECRET: optStr,
+  // Facebook Login uses the PARENT Meta app id + secret, which differ from the
+  // Instagram app id/secret above (those drive the Instagram Login flow).
+  META_FB_APP_ID: optStr,
+  META_FB_APP_SECRET: optStr,
   META_VERIFY_TOKEN: optStr,
   META_GRAPH_VERSION: z.string().default('v21.0'),
   CREDIT_MARKUP: z.coerce.number().default(2.0),
@@ -44,6 +48,12 @@ export const ENV = {
 
 export function metaConfigured(): boolean {
   return !!(ENV.META_APP_ID && ENV.META_APP_SECRET && ENV.META_VERIFY_TOKEN);
+}
+
+// Facebook Page connect (Facebook Login for Business). Needs the parent Meta app
+// credentials + the shared verify token used by the same /api/meta/webhook endpoint.
+export function fbConfigured(): boolean {
+  return !!(ENV.META_FB_APP_ID && ENV.META_FB_APP_SECRET && ENV.META_VERIFY_TOKEN);
 }
 
 export function anthropicConfigured(): boolean {

@@ -93,6 +93,31 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
           continue;
         }
 
+        // ── Facebook Page post comment (field='feed') ───────────────────────
+        // FB delivers post activity (comments, likes, reactions, shares) on the
+        // 'feed' field; we only want freshly-added comments. The comment text is in
+        // `value.message` (a string, unlike IG's `value.text`) and the author in
+        // `value.from.{id,name}`.
+        if (ch.field === 'feed') {
+          const fv = ch.value as unknown as {
+            item?: string; verb?: string; comment_id?: string;
+            message?: string; from?: { id?: string; name?: string }; post_id?: string;
+          };
+          if (fv.item !== 'comment' || fv.verb !== 'add') { skipped.push(`feed.${fv.item}:${fv.verb}`); continue; }
+          if (!fv.comment_id) { skipped.push('feed.no_comment_id'); continue; }
+          if (!fv.message) { skipped.push('feed.no_message'); continue; }
+          if (!fv.from?.id) { skipped.push('feed.no_from'); continue; }
+          if (fv.from.id === accountId) { skipped.push('feed.self'); continue; } // our own reply
+          events.push({
+            kind: 'comment', shape: 'changes', pageOrAccountId: accountId,
+            userId: fv.from.id, recipientId: accountId, text: fv.message,
+            mid: fv.comment_id, commentId: fv.comment_id, username: fv.from.name,
+            commentMediaType: 'FACEBOOK',
+            timestamp: toMs(entryTime),
+          });
+          continue;
+        }
+
         // ── Button tap (postback) delivered as a change ─────────────────────
         if (ch.field === 'messaging_postbacks' || v.postback) {
           if (!v.sender?.id) { skipped.push('postback.no_sender'); continue; }
@@ -222,12 +247,12 @@ export async function handleEvent(ev: Normalized) {
   // Two queries: try ig_user_id match first, then page_id
   let account: {
     id: string; org_id: string; ig_user_id: string | null; page_id: string | null;
-    access_token: string; username: string | null;
+    access_token: string; username: string | null; platform: string | null;
   } | null = null;
   for (const cand of candidates) {
     const { data, error } = await db
       .from('meta_accounts')
-      .select('id, org_id, ig_user_id, page_id, access_token, username')
+      .select('id, org_id, ig_user_id, page_id, access_token, username, platform')
       .or(`ig_user_id.eq.${cand},page_id.eq.${cand}`)
       .maybeSingle();
     if (error) {
@@ -447,7 +472,7 @@ export async function handleEvent(ev: Normalized) {
   // For comment events, find out if the commenter follows the business. This decides
   // whether a public comment reply should add a "check your message requests" note.
   let userFollowsBusiness: boolean | undefined = undefined;
-  if (ev.kind === 'comment' && account.access_token) {
+  if (ev.kind === 'comment' && account.access_token && account.platform !== 'facebook') {
     try {
       const url = new URL(`https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${senderIgId}`);
       url.searchParams.set('fields', 'is_user_follow_business');
@@ -475,6 +500,8 @@ export async function handleEvent(ev: Normalized) {
       accountIgUserId: account.ig_user_id ?? '',
       accountToken: account.access_token,
       accountUsername: account.username ?? null,
+      accountPlatform: account.platform ?? 'instagram',
+      accountPageId: account.page_id,
       leadIgUserId: senderIgId,
       messageText: ev.text ?? '',
       transcript,
