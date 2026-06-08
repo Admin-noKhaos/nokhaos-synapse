@@ -32,6 +32,7 @@ export type Normalized = {
   postbackPayload?: string;
   commentId?: string;
   commentMediaType?: string; // FEED | REELS | ... for comment events
+  commentMediaId?: string;   // id of the post/reel the comment is on
   isStoryReply?: boolean; // DM that is a reply to one of our stories
   username?: string;     // commenter username when provided
   timestamp: number;
@@ -88,6 +89,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             userId: v.from.id, recipientId: accountId, text: v.text,
             mid: v.id, commentId: v.id, username: v.from.username,
             commentMediaType: v.media?.media_product_type,
+            commentMediaId: v.media?.id,
             timestamp: toMs(v.timestamp ?? entryTime),
           });
           continue;
@@ -112,7 +114,7 @@ function normalizeEvents(payload: Payload): { events: Normalized[]; skipped: str
             kind: 'comment', shape: 'changes', pageOrAccountId: accountId,
             userId: fv.from.id, recipientId: accountId, text: fv.message,
             mid: fv.comment_id, commentId: fv.comment_id, username: fv.from.name,
-            commentMediaType: 'FACEBOOK',
+            commentMediaType: 'FACEBOOK', commentMediaId: fv.post_id,
             timestamp: toMs(entryTime),
           });
           continue;
@@ -503,6 +505,7 @@ export async function handleEvent(ev: Normalized) {
       accountPlatform: account.platform ?? 'instagram',
       accountPageId: account.page_id,
       leadIgUserId: senderIgId,
+      leadUsername,
       messageText: ev.text ?? '',
       transcript,
       brainMd,
@@ -510,6 +513,7 @@ export async function handleEvent(ev: Normalized) {
       postbackPayload: ev.postbackPayload,
       commentId: ev.commentId,
       commentMediaType: ev.commentMediaType,
+      commentMediaId: ev.commentMediaId,
       isFirstContact,
       isStoryReply: ev.isStoryReply,
       userFollowsBusiness,

@@ -4,9 +4,9 @@
 export type NodeKind = 'trigger' | 'ai' | 'condition' | 'action';
 
 export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply' | 'button_click';
-export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag';
-export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'if_first_contact' | 'if_returning' | 'else';
-export type ActionType = 'send_dm' | 'send_buttons' | 'reply_comment' | 'send_link' | 'follow_up' | 'add_tag' | 'set_funnel' | 'handoff_human';
+export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag' | 'moderate_comment';
+export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'if_first_contact' | 'if_returning' | 'if_sentiment' | 'else';
+export type ActionType = 'send_dm' | 'send_buttons' | 'reply_comment' | 'send_link' | 'follow_up' | 'add_tag' | 'set_funnel' | 'flag_comment' | 'handoff_human';
 
 /** A tappable button attached to a send_buttons message. Tapping it sends the
  *  title back as the lead's reply and fires `payload` as a button_click event. */
@@ -42,6 +42,10 @@ export type TriggerConfig = {
   /** Substring filter on inbound text. Comma-separated = match if ANY term is present
    *  (e.g. "START, VIDEO, TRAINING"). Case-insensitive. Empty = match all. */
   contains?: string;
+  /** Comma-separated keywords to EXCLUDE (whole-word). If any appears in the text
+   *  the trigger does NOT fire — lets a "catch-all" comment flow skip comments
+   *  already handled by a keyword flow (e.g. exclude "WEBINAR"). */
+  exclude?: string;
   /** Optional comma-separated list of IG handles to limit to. */
   from_handles?: string;
   /** For comment_keyword: limit to comments on posts (feed) or reels only.
@@ -73,6 +77,8 @@ export type ConditionConfig = {
   threshold?: number;
   /** For if_contains: substring to look for in last message. */
   contains?: string;
+  /** For if_sentiment: which comment sentiment to match ('positive'|'negative'|'neutral'). */
+  sentiment?: string;
 };
 
 export type ActionConfig = {
@@ -143,7 +149,7 @@ export function defaultNode(kind: NodeKind, type: string, position: { x: number;
     case 'condition':
       return {
         ...base, kind: 'condition', type: type as ConditionType, label: conditionLabel(type as ConditionType),
-        config: type === 'if_intent' ? { intent: 'purchase' } : type === 'if_score_gt' ? { threshold: 70 } : {},
+        config: type === 'if_intent' ? { intent: 'purchase' } : type === 'if_score_gt' ? { threshold: 70 } : type === 'if_sentiment' ? { sentiment: 'positive' } : {},
       };
     case 'action':
       return {
@@ -165,13 +171,13 @@ function triggerLabel(t: TriggerType) {
   return { new_dm: 'New DM received', comment_keyword: 'Comment with keyword', story_reply: 'Story reply', button_click: 'Button tapped' }[t];
 }
 function aiLabel(t: AiType) {
-  return { classify_intent: 'Classify intent', generate_reply: 'Generate reply', score_lead: 'Score lead', tag: 'Auto-tag' }[t];
+  return { classify_intent: 'Classify intent', generate_reply: 'Generate reply', score_lead: 'Score lead', tag: 'Auto-tag', moderate_comment: 'Translate + read sentiment' }[t];
 }
 function conditionLabel(t: ConditionType) {
-  return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', if_first_contact: 'If first message', if_returning: 'If returning lead', else: 'Else' }[t];
+  return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', if_first_contact: 'If first message', if_returning: 'If returning lead', if_sentiment: 'If sentiment =', else: 'Else' }[t];
 }
 function actionLabel(t: ActionType) {
-  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', reply_comment: 'Reply to comment', send_link: 'Send funnel link', follow_up: 'Follow up later', add_tag: 'Tag lead', set_funnel: 'Set funnel', handoff_human: 'Notify human' }[t];
+  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', reply_comment: 'Reply to comment', send_link: 'Send funnel link', follow_up: 'Follow up later', add_tag: 'Tag lead', set_funnel: 'Set funnel', flag_comment: 'Flag for moderation', handoff_human: 'Notify human' }[t];
 }
 
 // ─── Default templates (used by the "Create from template" empty-state) ────

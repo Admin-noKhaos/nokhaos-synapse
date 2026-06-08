@@ -55,6 +55,16 @@ type RunContext = {
   commentId?: string;
   /** For 'comment' events: the media type the comment is on (FEED | REELS | ...). */
   commentMediaType?: string;
+  /** For 'comment' events: the id of the post/reel the comment is on (for linking). */
+  commentMediaId?: string;
+  /** The commenter's / lead's handle, when known (for moderation display). */
+  leadUsername?: string | null;
+
+  // Filled by the moderate_comment AI node.
+  commentSentiment?: 'positive' | 'negative' | 'neutral';
+  commentLanguage?: string;
+  commentTranslation?: string;
+  commentReason?: string;
   /** True when the inbound DM is a reply to one of the account's stories. */
   isStoryReply?: boolean;
   /** Whether the lead follows the business. Undefined = unknown. Used to decide
@@ -130,9 +140,15 @@ async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string,
 // Punctuation around the word is fine (word boundaries). Empty = match all.
 function keywordMatches(node: FlowNode, text: string): boolean {
   const raw = (node.config.contains as string | undefined)?.trim();
-  if (!raw) return true;
-  const terms = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (terms.length === 0) return true;
+  if (!raw) return true; // empty = match all
+  return keywordListMatches(raw, text);
+}
+
+// True if ANY comma-separated term in `raw` appears as a whole word in `text`.
+// Empty/undefined `raw` returns false (nothing to match).
+function keywordListMatches(raw: string | undefined, text: string): boolean {
+  const terms = (raw ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (terms.length === 0) return false;
   const t = (text ?? '').toLowerCase();
   return terms.some((term) => {
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -147,6 +163,8 @@ function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
       return ctx.eventKind === 'dm' && keywordMatches(node, ctx.messageText);
     case 'comment_keyword': {
       if (ctx.eventKind !== 'comment' || !keywordMatches(node, ctx.messageText)) return false;
+      // Exclude keywords: skip comments already handled by a keyword flow.
+      if (keywordListMatches(node.config.exclude as string | undefined, ctx.messageText)) return false;
       const media = (node.config.media as string | undefined) ?? 'any';
       if (media === 'any') return true;
       const isReel = (ctx.commentMediaType ?? '').toUpperCase() === 'REELS';
@@ -208,6 +226,9 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
     if (node.type === 'generate_reply') {
       return aiGenerateReply(node, ctx);
     }
+    if (node.type === 'moderate_comment') {
+      return aiModerateComment(node, ctx);
+    }
     if (node.type === 'score_lead') {
       // score is already produced by the upstream classify (we re-use)
       return { proceed: true };
@@ -228,6 +249,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
     if (node.type === 'send_dm') return actionSendDm(node, ctx);
     if (node.type === 'send_buttons') return actionSendButtons(node, ctx);
     if (node.type === 'reply_comment') return actionReplyComment(node, ctx);
+    if (node.type === 'flag_comment') return actionFlagComment(node, ctx);
     if (node.type === 'follow_up') return actionFollowUp(node, ctx);
     if (node.type === 'send_link') return actionSendLink(node, ctx);
     if (node.type === 'add_tag') return actionAddTag(node, ctx);
@@ -326,6 +348,12 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
     .limit(5);
   const priorBot = (recentUs ?? []).map((m) => m.text as string).filter(Boolean);
 
+  // Reply in the commenter's language when moderate_comment detected a non-English one.
+  const langLine = ctx.commentLanguage && ctx.commentLanguage.toLowerCase() !== 'english'
+    ? ` Reply in the same language as the person you are replying to (${ctx.commentLanguage}).`
+    : '';
+  const channel = ctx.accountPlatform === 'facebook' ? 'Facebook' : 'Instagram';
+
   // Generate, and if the result is too similar to something we already sent, retry
   // with an explicit anti-repeat instruction and higher temperature (up to 3 tries).
   let reply = '';
@@ -338,8 +366,8 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
       relatedId: ctx.conversationId,
       cacheSystem: true,
       system:
-        `You are Synapse, replying as @${ctx.accountUsername ?? 'brand'} on Instagram. ` +
-        `Voice: ${voice}. Goal: ${goal}. Output ONLY the reply text, 1-3 sentences max, no quotes, no markdown. ` +
+        `You are Synapse, replying as @${ctx.accountUsername ?? 'brand'} on ${channel}. ` +
+        `Voice: ${voice}. Goal: ${goal}.${langLine} Output ONLY the reply text, 1-3 sentences max, no quotes, no markdown. ` +
         (extra ? `\n${extra}` : '') + antiRepeat +
         brainBlock,
       userMessage: `Recent conversation:\n${ctx.transcript}\n\nWrite the next reply as the brand:`,
@@ -352,6 +380,44 @@ async function aiGenerateReply(node: FlowNode, ctx: RunContext): Promise<{ proce
     console.warn(`generate_reply: near-duplicate of a prior message (attempt ${attempt + 1}/3), regenerating`);
   }
   ctx.generatedReply = reply;
+  return { proceed: true };
+}
+
+// Read a single public comment: detect language, translate to English, and
+// classify sentiment as positive / negative / neutral. Stores results on ctx for
+// downstream if_sentiment branching, language-aware replies, and moderation flags.
+async function aiModerateComment(_node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  const text = (ctx.messageText ?? '').trim();
+  ctx.commentSentiment = 'neutral'; // safe default: no reply, no flag
+  if (!text || !ENV.ANTHROPIC_API_KEY) return { proceed: true };
+  try {
+    const r = await workerCall({
+      orgId: ctx.orgId,
+      purpose: 'classify',
+      relatedId: ctx.conversationId,
+      cacheSystem: true,
+      system:
+        `You analyze ONE public comment left on a social media post. The comment may be in any language. ` +
+        `Return STRICT JSON only: {"language":"<English name of the comment's language>","translation":"<comment translated to English>","sentiment":"positive"|"negative"|"neutral","reason":"<short reason>"}. ` +
+        `"positive" = genuinely kind, supportive, appreciative, or thoughtful. ` +
+        `"negative" = insulting, hateful, abusive, trolling, scam/spam, or hostile. ` +
+        `"neutral" = everything else (questions, plain statements, emojis, tags, vague). ` +
+        `No markdown, no text outside the JSON.`,
+      userMessage: `Comment:\n${text}`,
+      maxTokens: 300,
+      temperature: 0.1,
+    });
+    const cleaned = r.text.trim().replace(/^```(?:json)?\s*/, '').replace(/```\s*$/, '');
+    const parsed = JSON.parse(cleaned) as { language?: string; translation?: string; sentiment?: string; reason?: string };
+    ctx.commentLanguage = parsed.language ?? 'English';
+    ctx.commentTranslation = parsed.translation ?? text;
+    ctx.commentReason = parsed.reason ?? '';
+    const s = (parsed.sentiment ?? 'neutral').toLowerCase();
+    ctx.commentSentiment = s === 'positive' || s === 'negative' ? s : 'neutral';
+    console.log(`moderate_comment: sentiment=${ctx.commentSentiment} lang=${ctx.commentLanguage}`);
+  } catch (e) {
+    console.error('moderate_comment failed', e instanceof Error ? e.message : String(e));
+  }
   return { proceed: true };
 }
 
@@ -377,6 +443,10 @@ async function evaluateCondition(node: FlowNode, ctx: RunContext): Promise<{ pro
   }
   if (node.type === 'if_returning') {
     return { proceed: ctx.isFirstContact === false };
+  }
+  if (node.type === 'if_sentiment') {
+    const target = (node.config.sentiment as string | undefined)?.trim().toLowerCase();
+    return { proceed: !!target && ctx.commentSentiment === target };
   }
   if (node.type === 'else') {
     // "else" always continues — graph authors put it on a parallel branch from
@@ -514,7 +584,9 @@ async function actionReplyComment(node: FlowNode, ctx: RunContext): Promise<{ pr
   }
   let text = pickVariant(node.config) || ctx.generatedReply || '';
   if (!text) return { proceed: true };
-  if (ctx.userFollowsBusiness === false) text = `${text} (check your message requests)`;
+  // Only nudge them to their DMs if this run actually sent one (e.g. the WEBINAR
+  // flow). A standalone comment reply with no DM should not say "check your DMs".
+  if (ctx.dmAttempted && ctx.userFollowsBusiness === false) text = `${text} (check your message requests)`;
   try {
     // IG public comment replies: POST /{comment-id}/replies. Facebook: POST /{comment-id}/comments.
     const url = ctx.accountPlatform === 'facebook'
@@ -529,6 +601,36 @@ async function actionReplyComment(node: FlowNode, ctx: RunContext): Promise<{ pr
   } catch (e) {
     console.error('reply_comment failed', e);
   }
+  return { proceed: true };
+}
+
+// Flag a comment for human moderation (the negative branch). Upserts a row into
+// flagged_comments that the Moderation page reads; idempotent per (org, comment).
+async function actionFlagComment(_node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  if (!ctx.commentId) {
+    console.warn('flag_comment: no comment id on this event — skipping');
+    return { proceed: true };
+  }
+  const { error } = await db.from('flagged_comments').upsert(
+    {
+      org_id: ctx.orgId,
+      meta_account_id: ctx.accountId,
+      platform: ctx.accountPlatform ?? 'instagram',
+      comment_id: ctx.commentId,
+      media_id: ctx.commentMediaId ?? null,
+      author_id: ctx.leadIgUserId,
+      author_username: ctx.leadUsername ?? null,
+      text: ctx.messageText ?? '',
+      translation: ctx.commentTranslation ?? null,
+      language: ctx.commentLanguage ?? null,
+      sentiment: ctx.commentSentiment ?? 'negative',
+      reason: ctx.commentReason ?? null,
+      status: 'pending',
+    },
+    { onConflict: 'org_id,comment_id' },
+  );
+  if (error) console.error('flag_comment insert failed', error.message);
+  else console.log(`flag_comment: flagged ${ctx.commentId} for moderation`);
   return { proceed: true };
 }
 

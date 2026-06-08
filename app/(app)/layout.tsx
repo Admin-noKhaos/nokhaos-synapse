@@ -3,6 +3,7 @@ import { getCurrentSession } from '@/lib/auth';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { AppShell } from '@/components/AppShell';
 import { getSupabaseServer } from '@/lib/supabase/server';
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getCurrentSession();
@@ -17,6 +18,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       .eq('org_id', session.org.id).eq('sender', 'ai').contains('ai_meta', { suggested: true }),
   ]);
 
+  // flagged_comments is RLS-locked (service-role only) — count pending via admin.
+  const { count: moderationPending } = await getSupabaseAdmin()
+    .from('flagged_comments').select('id', { count: 'exact', head: true })
+    .eq('org_id', session.org.id).eq('status', 'pending');
+
   return (
     <ThemeProvider>
       <AppShell
@@ -25,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         userName={session.user.full_name || session.user.email}
         inboxBadge={inboxUnread ?? undefined}
         approvalBadge={approvalCount ?? undefined}
+        moderationBadge={moderationPending ?? undefined}
       >
         {children}
       </AppShell>

@@ -17,6 +17,7 @@ const PRIMARY: NavItem[] = [
   { href: '/flow',       label: 'Flow Builder',   icon: <I.Branch    size={17} /> },
   { href: '/inbox',      label: 'Inbox',          icon: <I.Inbox     size={17} /> },
   { href: '/approval',   label: 'Approval Queue', icon: <I.Check     size={17} /> },
+  { href: '/moderation', label: 'Moderation',     icon: <I.Eye       size={17} /> },
   { href: '/stories',    label: 'Story Replies',  icon: <I.Heart     size={17} /> },
   { href: '/contacts',   label: 'Contacts',       icon: <I.Layers    size={17} /> },
   { href: '/broadcasts', label: 'Broadcasts',     icon: <I.Megaphone size={17} /> },
@@ -41,12 +42,14 @@ export function Sidebar({
   onWorkspaceClick,
   approvalBadge,
   inboxBadge,
+  moderationBadge,
 }: {
   orgName: string;
   plan: string;
   onWorkspaceClick?: () => void;
   approvalBadge?: number;
   inboxBadge?: number;
+  moderationBadge?: number;
 }) {
   const pathname = usePathname();
 
@@ -151,7 +154,7 @@ export function Sidebar({
       <div className="sx-nav-scroll">
         <nav className="sx-nav">
           {PRIMARY.map((it) => {
-            const badge = it.href === '/inbox' ? inboxBadge : it.href === '/approval' ? approvalBadge : it.badge;
+            const badge = it.href === '/inbox' ? inboxBadge : it.href === '/approval' ? approvalBadge : it.href === '/moderation' ? moderationBadge : it.badge;
             return (
               <Link
                 key={it.href}

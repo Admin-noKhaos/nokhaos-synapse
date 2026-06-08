@@ -42,6 +42,7 @@ export function AppShell({
   userName,
   approvalBadge,
   inboxBadge,
+  moderationBadge,
 }: {
   children: React.ReactNode;
   orgName: string;
@@ -49,6 +50,7 @@ export function AppShell({
   userName: string;
   approvalBadge?: number;
   inboxBadge?: number;
+  moderationBadge?: number;
 }) {
   const pathname = usePathname() || '/dashboard';
   const router = useRouter();
@@ -108,6 +110,7 @@ export function AppShell({
         plan={plan}
         approvalBadge={approvalBadge}
         inboxBadge={inboxBadge}
+        moderationBadge={moderationBadge}
         onWorkspaceClick={() => setAcctOpen(true)}
       />
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
