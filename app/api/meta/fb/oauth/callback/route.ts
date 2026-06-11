@@ -67,10 +67,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Upsert a Page connection. The only unique constraint is (org_id, ig_user_id),
-// so: if the Page has a linked IG account, upsert on that key — which also
-// *upgrades* an existing Instagram-Login row to a Page token (thread ownership).
-// If the Page has no linked IG, match manually on (org_id, page_id).
+// Upsert a Page connection.
+//
+// IMPORTANT: if the org already has an Instagram-Login row for the Page's linked
+// IG account, we DO NOT overwrite it. Page-token sends to Instagram require the
+// parent app to have Advanced Access to instagram_manage_messages (until App
+// Review passes, they only reach users with a role on the app), while the
+// Instagram-Login token works for everyone. So the IG row keeps its token, and
+// the Page is stored as its own row keyed by (org_id, page_id).
 async function upsertPage(
   admin: ReturnType<typeof getSupabaseAdmin>,
   orgId: string,
@@ -78,10 +82,25 @@ async function upsertPage(
   webhookOk: boolean,
 ): Promise<boolean> {
   const ig = page.instagram_business_account;
+
+  // Keep an existing Instagram-Login connection intact (see note above).
+  let igRowExists = false;
+  if (ig?.id) {
+    const { data: igRow } = await admin
+      .from('meta_accounts')
+      .select('id, platform')
+      .eq('org_id', orgId)
+      .eq('ig_user_id', ig.id)
+      .maybeSingle();
+    igRowExists = !!igRow;
+  }
+
   const row = {
     org_id: orgId,
     platform: 'facebook' as const,
-    ig_user_id: ig?.id ?? null,
+    // If the linked IG already has its own row, store the Page without claiming
+    // the IG id (unique constraint is on org_id+ig_user_id).
+    ig_user_id: igRowExists ? null : (ig?.id ?? null),
     page_id: page.id,
     page_name: page.name,
     username: ig?.username ?? page.name,
@@ -99,7 +118,7 @@ async function upsertPage(
     },
   };
 
-  if (ig?.id) {
+  if (ig?.id && !igRowExists) {
     const { error } = await admin.from('meta_accounts').upsert(row, { onConflict: 'org_id,ig_user_id' });
     if (error) { console.error('fb page upsert (by ig) failed', error.message); return false; }
     if (ig.followers_count) {
