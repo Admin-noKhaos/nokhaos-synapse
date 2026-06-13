@@ -16,6 +16,7 @@ type FollowupRow = {
   lead_ig_user_id: string; sequence_id: string; step: number;
   reference_at: string; mode: string; goal: string | null;
   variants: string[] | null; use_master_doc: boolean;
+  cancel_on_reply: boolean;
 };
 
 function log(...args: unknown[]) { console.log('[followup]', ...args); }
@@ -28,7 +29,7 @@ export async function runDueFollowups(): Promise<void> {
   try {
     const { data: rows, error } = await db
       .from('scheduled_followups')
-      .select('id, org_id, conversation_id, account_id, lead_ig_user_id, sequence_id, step, reference_at, mode, goal, variants, use_master_doc')
+      .select('id, org_id, conversation_id, account_id, lead_ig_user_id, sequence_id, step, reference_at, mode, goal, variants, use_master_doc, cancel_on_reply')
       .eq('status', 'pending')
       .lte('due_at', new Date().toISOString())
       .order('due_at', { ascending: true })
@@ -43,19 +44,24 @@ export async function runDueFollowups(): Promise<void> {
 }
 
 async function processFollowup(row: FollowupRow): Promise<void> {
-  // Did the lead reply since the message we're following up on? If so, stop the
-  // whole sequence and send nothing.
-  const { count } = await db
-    .from('messages')
-    .select('id', { count: 'exact', head: true })
-    .eq('conversation_id', row.conversation_id)
-    .eq('sender', 'them')
-    .gt('sent_at', row.reference_at);
-  if ((count ?? 0) > 0) {
-    await db.from('scheduled_followups').update({ status: 'cancelled' })
-      .eq('sequence_id', row.sequence_id).eq('status', 'pending');
-    log(`seq ${row.sequence_id.slice(0, 8)}: lead replied — sequence cancelled`);
-    return;
+  const isRetry = row.mode === 'retry';
+
+  // For ordinary follow-up nudges: if the lead replied since the reference point,
+  // cancel the sequence. Retry-sends opt out via cancel_on_reply=false because the
+  // payload they're delivering (the link they asked for) is still wanted.
+  if (row.cancel_on_reply !== false) {
+    const { count } = await db
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', row.conversation_id)
+      .eq('sender', 'them')
+      .gt('sent_at', row.reference_at);
+    if ((count ?? 0) > 0) {
+      await db.from('scheduled_followups').update({ status: 'cancelled' })
+        .eq('sequence_id', row.sequence_id).eq('status', 'pending');
+      log(`seq ${row.sequence_id.slice(0, 8)}: lead replied — sequence cancelled`);
+      return;
+    }
   }
 
   const { data: acct } = await db
@@ -71,9 +77,12 @@ async function processFollowup(row: FollowupRow): Promise<void> {
     return;
   }
 
-  const text = row.mode === 'static' && row.variants?.length
-    ? row.variants[Math.floor(Math.random() * row.variants.length)].trim()
-    : await generateFollowup(row, acct.username ?? null);
+  // Pick the text. Retry-sends use the stored variant verbatim (the original link).
+  const text = isRetry && row.variants?.length
+    ? (row.variants[0] ?? '').trim()
+    : row.mode === 'static' && row.variants?.length
+      ? row.variants[Math.floor(Math.random() * row.variants.length)].trim()
+      : await generateFollowup(row, acct.username ?? null);
   if (!text) { await mark(row.id, 'cancelled'); return; }
 
   const host = acct.platform === 'facebook' ? 'graph.facebook.com' : 'graph.instagram.com';
@@ -82,16 +91,28 @@ async function processFollowup(row: FollowupRow): Promise<void> {
     await db.from('messages').insert({
       org_id: row.org_id, conversation_id: row.conversation_id,
       sender: 'us', text, sent_at: new Date().toISOString(),
-      ai_meta: { auto: true, followup: true, step: row.step },
+      ai_meta: isRetry
+        ? { auto: true, automation: true, retry: true, step: row.step }
+        : { auto: true, followup: true, step: row.step },
     });
     await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', row.conversation_id);
     await mark(row.id, 'sent');
-    log(`sent follow-up step ${row.step} for conv ${row.conversation_id.slice(0, 8)}`);
+    if (isRetry) {
+      // The link landed — cancel the rest of the retry waves.
+      await db.from('scheduled_followups')
+        .update({ status: 'cancelled' })
+        .eq('sequence_id', row.sequence_id)
+        .eq('status', 'pending');
+      log(`retry step ${row.step} delivered for conv ${row.conversation_id.slice(0, 8)} — remaining waves cancelled`);
+    } else {
+      log(`sent follow-up step ${row.step} for conv ${row.conversation_id.slice(0, 8)}`);
+    }
   } else {
-    // Couldn't deliver (e.g. messaging window closed / not the thread owner).
-    // Mark failed so it doesn't retry forever.
+    // For ordinary follow-ups: mark this attempt failed and stop. For retry-sends:
+    // keep the row failed but the rest of the sequence stays pending — a later wave
+    // may succeed once the inbox lock lapses.
     await mark(row.id, 'failed');
-    log(`follow-up send failed for conv ${row.conversation_id.slice(0, 8)} — marked failed`);
+    log(`${isRetry ? 'retry' : 'follow-up'} send failed for conv ${row.conversation_id.slice(0, 8)} step ${row.step}`);
   }
 }
 

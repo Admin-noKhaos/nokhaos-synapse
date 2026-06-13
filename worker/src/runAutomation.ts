@@ -477,12 +477,40 @@ function sendBase(ctx: RunContext): string {
   return `https://graph.instagram.com/${ENV.META_GRAPH_VERSION}/${ctx.accountIgUserId}`;
 }
 
+// Look up the Facebook Page in the same org whose linked IG matches this account.
+// take_thread_control is a Page-only endpoint that must be called against
+// graph.facebook.com with a Page token — calling it via graph.instagram.com with
+// the IG-Login token fails with error_subcode 33 ("does not support this operation").
+async function getPageForLinkedIg(ctx: RunContext): Promise<{ pageId: string; token: string } | null> {
+  if (ctx.accountPlatform === 'facebook' && ctx.accountPageId) {
+    return { pageId: ctx.accountPageId, token: ctx.accountToken };
+  }
+  if (!ctx.accountUsername) return null;
+  const { data, error } = await db
+    .from('meta_accounts')
+    .select('page_id, access_token, meta')
+    .eq('org_id', ctx.orgId)
+    .eq('platform', 'facebook')
+    .not('page_id', 'is', null)
+    .ilike('meta->>ig_username', ctx.accountUsername)
+    .limit(1)
+    .maybeSingle();
+  if (error) { console.error('linked page lookup error', error.message); return null; }
+  if (!data?.page_id || !data.access_token) return null;
+  return { pageId: data.page_id, token: data.access_token };
+}
+
 async function takeThreadControl(ctx: RunContext): Promise<boolean> {
   try {
-    const url = `${sendBase(ctx)}/take_thread_control`;
+    const page = await getPageForLinkedIg(ctx);
+    if (!page) {
+      console.warn(`take_thread_control: no linked Facebook Page for @${ctx.accountUsername ?? '?'} — connect the Page to unlock handover`);
+      return false;
+    }
+    const url = `https://graph.facebook.com/${ENV.META_GRAPH_VERSION}/${page.pageId}/take_thread_control?access_token=${encodeURIComponent(page.token)}`;
     const r = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ctx.accountToken}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ recipient: { id: ctx.leadIgUserId } }),
     });
     if (!r.ok) {
@@ -515,7 +543,11 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
       const errText = await r.text();
       // Handover protocol: we're not the thread owner. Take control and retry once.
       // (Only possible for id-recipients, not comment_id private replies.)
-      if ('id' in recipient && (errText.includes('2534037') || errText.toLowerCase().includes('not the thread owner'))) {
+      const isLockError =
+        errText.includes('2534037') ||
+        errText.includes('2534048') ||
+        errText.toLowerCase().includes('not the thread owner');
+      if ('id' in recipient && isLockError) {
         console.warn('send blocked (not thread owner) — attempting take_thread_control');
         if (await takeThreadControl(ctx)) {
           r = await post();
@@ -523,6 +555,11 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
       }
       if (!r.ok) {
         console.error('send message meta call failed', r.status, r.ok ? '' : errText);
+        // Lock-bound failure for a direct DM (not a comment private reply): schedule
+        // retries. Most inbox locks self-release within 24h; one of the retries lands.
+        if ('id' in recipient && isLockError && persistText.trim()) {
+          await scheduleSendRetry(ctx, persistText);
+        }
         return;
       }
     }
@@ -545,6 +582,49 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
     }).eq('id', ctx.conversationId);
   } catch (e) {
     console.error('send message failed', e);
+  }
+}
+
+// Schedule retries of a failed-due-to-thread-lock send. Most inbox locks
+// self-release within 24h (handover protocol auto-timeout). Step intervals:
+// +15m, +1h, +6h, +24h. cancel_on_reply=false so the lead replying mid-window
+// doesn't kill the retry — they still need the link they originally asked for.
+// Replaces any pending retries for the same conversation.
+const RETRY_DELAYS_MINUTES = [15, 60, 360, 1440];
+
+async function scheduleSendRetry(ctx: RunContext, persistText: string): Promise<void> {
+  try {
+    // Drop any prior pending retries for this conversation — keyword sends are
+    // idempotent (always the same link), so we don't want two waves stacking up.
+    await db.from('scheduled_followups')
+      .update({ status: 'cancelled' })
+      .eq('conversation_id', ctx.conversationId)
+      .eq('mode', 'retry')
+      .eq('status', 'pending');
+
+    const sequenceId = randomUUID();
+    const referenceAt = new Date().toISOString();
+    const rows = RETRY_DELAYS_MINUTES.map((mins, idx) => ({
+      org_id: ctx.orgId,
+      conversation_id: ctx.conversationId,
+      account_id: ctx.accountId,
+      lead_ig_user_id: ctx.leadIgUserId,
+      sequence_id: sequenceId,
+      step: idx + 1,
+      reference_at: referenceAt,
+      due_at: new Date(Date.now() + mins * 60_000).toISOString(),
+      mode: 'retry',
+      goal: null as string | null,
+      variants: [persistText],
+      use_master_doc: false,
+      cancel_on_reply: false,
+      status: 'pending',
+    }));
+    const { error } = await db.from('scheduled_followups').insert(rows);
+    if (error) console.error('scheduleSendRetry insert error', error.message);
+    else console.log(`scheduled ${rows.length} send retries for conv ${ctx.conversationId.slice(0, 8)} (lock recovery)`);
+  } catch (e) {
+    console.error('scheduleSendRetry threw', e instanceof Error ? e.message : String(e));
   }
 }
 
