@@ -529,12 +529,24 @@ async function takeThreadControl(ctx: RunContext): Promise<boolean> {
 // instagram-tagged links report as facebook-tagged. Flows author links once with
 // `el=instagram-*` / `utm_source=instagram-*`; for FB sends we swap "instagram"
 // to "facebook" so the destination's analytics sees the right channel.
+//
+// FB collapses post + reel into a single `feed` webhook, so the worker can't
+// tell from the event whether the parent media is a post or a reel. As a
+// pragmatic proxy we use the inbound keyword: if the comment text contains
+// "VIDEO" (whole word, case-insensitive), treat it as a reel — rewriting any
+// `-post` UTM tag to `-reel`. Other keywords keep the default (post).
 function adaptLinkPlatform(text: string, ctx: RunContext): string {
   if (ctx.accountPlatform !== 'facebook' || !text) return text;
-  return text
+  let out = text
     .replace(/(\bel=)instagram-/g, '$1facebook-')
     .replace(/(\butm_source=)instagram-/g, '$1facebook-')
     .replace(/(\butm_medium=)instagram\b/g, '$1facebook');
+  if (/\bvideo\b/i.test(ctx.messageText ?? '')) {
+    out = out
+      .replace(/(\bel=)facebook-post\b/g, '$1facebook-reel')
+      .replace(/(\butm_source=)facebook-post\b/g, '$1facebook-reel');
+  }
+  return out;
 }
 
 async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
