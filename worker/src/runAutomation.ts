@@ -525,9 +525,25 @@ async function takeThreadControl(ctx: RunContext): Promise<boolean> {
   }
 }
 
+// Rewrite UTM/tracking params in outbound text when sending via Facebook so
+// instagram-tagged links report as facebook-tagged. Flows author links once with
+// `el=instagram-*` / `utm_source=instagram-*`; for FB sends we swap "instagram"
+// to "facebook" so the destination's analytics sees the right channel.
+function adaptLinkPlatform(text: string, ctx: RunContext): string {
+  if (ctx.accountPlatform !== 'facebook' || !text) return text;
+  return text
+    .replace(/(\bel=)instagram-/g, '$1facebook-')
+    .replace(/(\butm_source=)instagram-/g, '$1facebook-')
+    .replace(/(\butm_medium=)instagram\b/g, '$1facebook');
+}
+
 async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
   ctx.dmAttempted = true;
   ctx.dmOk = false;
+  // Platform-aware UTM rewriting: instagram-tagged links → facebook-tagged
+  // when sending via the FB Page connection.
+  if (message.text) message = { ...message, text: adaptLinkPlatform(message.text, ctx) };
+  persistText = adaptLinkPlatform(persistText, ctx);
   const recipient = ctx.eventKind === 'comment' && ctx.commentId
     ? { comment_id: ctx.commentId }
     : { id: ctx.leadIgUserId };
