@@ -30,6 +30,12 @@ const REQUIRED_FB_SCOPES = [
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
+  // For posting public replies to comments on Page posts: needs both
+  // pages_manage_engagement (write) and pages_read_user_content (read the
+  // comment being replied to). Without these, /{comment_id}/comments returns 200
+  // (#200) "Permissions error".
+  'pages_manage_engagement',
+  'pages_read_user_content',
   'business_management',
   'instagram_basic',
   'instagram_manage_messages',
