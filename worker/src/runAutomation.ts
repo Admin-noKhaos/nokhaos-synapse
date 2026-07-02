@@ -156,7 +156,18 @@ function keywordListMatches(raw: string | undefined, text: string): boolean {
   });
 }
 
+// Optional per-trigger platform filter: skip the trigger when its config.platform
+// is set to a specific platform ('instagram' | 'facebook') and doesn't match the
+// current event's account. Undefined / 'any' = fire on either platform.
+function platformMatches(node: FlowNode, ctx: RunContext): boolean {
+  const want = (node.config.platform as string | undefined)?.toLowerCase();
+  if (!want || want === 'any') return true;
+  const actual = (ctx.accountPlatform ?? 'instagram').toLowerCase();
+  return want === actual;
+}
+
 function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
+  if (!platformMatches(node, ctx)) return false;
   switch (node.type) {
     case 'new_dm':
       // from_handles filter — would need lead username; skip for v1

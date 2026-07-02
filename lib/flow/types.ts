@@ -51,6 +51,9 @@ export type TriggerConfig = {
   /** For comment_keyword: limit to comments on posts (feed) or reels only.
    *  Undefined / 'any' = both. Lets you send a different link per media type. */
   media?: 'any' | 'post' | 'reel';
+  /** For comment_keyword / story_reply / new_dm: limit to events from a specific
+   *  platform. Undefined / 'any' = fire on both. */
+  platform?: 'any' | 'instagram' | 'facebook';
   /** For button_click: the payload of the tapped button this trigger fires on. */
   payload?: string;
 };
