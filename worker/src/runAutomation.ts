@@ -834,6 +834,30 @@ async function actionSendButtons(node: FlowNode, ctx: RunContext): Promise<{ pro
   return { proceed: true };
 }
 
+// Extract the video id from any common YouTube URL shape. Used to auto-derive
+// a thumbnail image for send_link_button when the link points to YouTube and no
+// explicit image_url was configured.
+function youtubeVideoId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const ok = (s: string) => /^[\w-]{8,}$/.test(s);
+    if (host === 'youtu.be' || host === 'www.youtu.be') {
+      const id = u.pathname.split('/').filter(Boolean)[0] ?? '';
+      return ok(id) ? id : null;
+    }
+    if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+      const v = u.searchParams.get('v');
+      if (v && ok(v)) return v;
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts.length >= 2 && ['embed', 'shorts', 'live', 'v'].includes(parts[0]) && ok(parts[1])) {
+        return parts[1];
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
 // Send a rich message card with a single URL button. Uses Meta's generic template
 // which is supported on both Instagram and Facebook Messenger. Because
 // comment-triggered private replies (recipient: { comment_id }) don't support
@@ -850,7 +874,14 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
   const buttonLabel = (((cfg.button_label as string | undefined) ?? 'Open link').trim() || 'Open link').slice(0, 20);
   const subtitleRaw = ((cfg.subtitle as string | undefined) ?? '').trim();
   const subtitle = subtitleRaw ? subtitleRaw.slice(0, 80) : undefined;
-  const imageUrl = ((cfg.image_url as string | undefined) ?? '').trim() || undefined;
+  let imageUrl = ((cfg.image_url as string | undefined) ?? '').trim() || undefined;
+  // If no image was configured but the destination is a YouTube video, use the
+  // video's thumbnail automatically (hqdefault is always available for every
+  // YouTube video and is 16:9, close to Meta's preferred 1.91:1).
+  if (!imageUrl) {
+    const yt = youtubeVideoId(url);
+    if (yt) imageUrl = `https://img.youtube.com/vi/${yt}/hqdefault.jpg`;
+  }
 
   // For comment private replies, Meta rejects template attachments. Fall back to
   // a plain-text DM containing the title + URL (still tappable, IG auto-linkifies).
