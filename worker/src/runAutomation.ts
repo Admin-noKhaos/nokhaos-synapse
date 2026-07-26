@@ -911,9 +911,21 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
 
   // Comment-triggered path (recipient: comment_id) doesn't allow template
   // attachments. Send two messages: a short private_reply to open the messaging
-  // window, then the card via the normal thread (recipient: id).
+  // window, then the card via the normal thread (recipient: id). The preface
+  // rotates through natural variants (matches the tone flow authors use for
+  // plain-text send_dm variants). Overridable per node via config.preface_variants.
   if (ctx.eventKind === 'comment' && ctx.commentId) {
-    const preface = 'Watch this →';
+    const DEFAULT_PREFACES = [
+      'Here it is.',
+      'Here you go.',
+      'Check it out.',
+      'Boom. Here you go.',
+      "Here's the link",
+    ];
+    const rawVariants = Array.isArray(cfg.preface_variants)
+      ? (cfg.preface_variants as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      : DEFAULT_PREFACES;
+    const preface = rawVariants[Math.floor(Math.random() * rawVariants.length)];
     await sendIgMessage(ctx, { text: preface }, preface, { asPrivateReply: true });
     await sendIgMessage(ctx, { attachment }, persistText, { asPrivateReply: false });
     return { proceed: true };

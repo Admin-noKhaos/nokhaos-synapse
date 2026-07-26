@@ -117,6 +117,11 @@ export type ActionConfig = {
    *  Must be a publicly reachable HTTPS URL. Recommended 1.91:1 aspect ratio
    *  (e.g. 1200×628) for horizontal cards, or 1:1 for square cards. */
   image_url?: string;
+  /** For send_link_button (comment-triggered): the short private-reply text
+   *  sent before the card, to satisfy Meta's private_reply requirement. One is
+   *  picked at random each time. Defaults to a set of natural variants
+   *  ("Here it is.", "Boom. Here you go.", etc.) if omitted. */
+  preface_variants?: string[];
 };
 
 /**
