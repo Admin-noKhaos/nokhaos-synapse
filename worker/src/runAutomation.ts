@@ -603,7 +603,12 @@ function appendContactParams(text: string, ctx: RunContext): string {
   });
 }
 
-async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
+async function sendIgMessage(
+  ctx: RunContext,
+  message: IgMessagePayload,
+  persistText: string,
+  opts?: { asPrivateReply?: boolean },
+): Promise<void> {
   ctx.dmAttempted = true;
   ctx.dmOk = false;
   // URL adaptation pipeline (order matters):
@@ -623,7 +628,13 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
     message = { ...message, attachment: { ...message.attachment, payload: { ...message.attachment.payload, elements: els } } };
   }
   persistText = adaptText(persistText);
-  const recipient = ctx.eventKind === 'comment' && ctx.commentId
+  // Recipient choice: default is auto (comment_id for comment-triggered runs,
+  // id otherwise). Callers can override with opts.asPrivateReply — e.g. the
+  // send_link_button two-step, which sends a short private_reply first, then
+  // switches to id-recipient for the template card follow-up.
+  const useCommentId = opts?.asPrivateReply
+    ?? (ctx.eventKind === 'comment' && !!ctx.commentId);
+  const recipient = useCommentId && ctx.commentId
     ? { comment_id: ctx.commentId }
     : { id: ctx.leadIgUserId };
   const url = `${sendBase(ctx)}/messages`;
@@ -883,14 +894,6 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
     if (yt) imageUrl = `https://img.youtube.com/vi/${yt}/hqdefault.jpg`;
   }
 
-  // For comment private replies, Meta rejects template attachments. Fall back to
-  // a plain-text DM containing the title + URL (still tappable, IG auto-linkifies).
-  if (ctx.eventKind === 'comment' && ctx.commentId) {
-    const plain = subtitle ? `${title}\n\n${subtitle}\n\n${url}` : `${title}\n\n${url}`;
-    await sendIgMessage(ctx, { text: plain }, plain);
-    return { proceed: true };
-  }
-
   const attachment: IgTemplateAttachment = {
     type: 'template',
     payload: {
@@ -905,6 +908,17 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
     },
   };
   const persistText = subtitle ? `${title} — ${subtitle} (${url})` : `${title} (${url})`;
+
+  // Comment-triggered path (recipient: comment_id) doesn't allow template
+  // attachments. Send two messages: a short private_reply to open the messaging
+  // window, then the card via the normal thread (recipient: id).
+  if (ctx.eventKind === 'comment' && ctx.commentId) {
+    const preface = 'Watch this →';
+    await sendIgMessage(ctx, { text: preface }, preface, { asPrivateReply: true });
+    await sendIgMessage(ctx, { attachment }, persistText, { asPrivateReply: false });
+    return { proceed: true };
+  }
+
   await sendIgMessage(ctx, { attachment }, persistText);
   return { proceed: true };
 }
