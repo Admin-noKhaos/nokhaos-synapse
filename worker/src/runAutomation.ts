@@ -822,6 +822,7 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
   const buttonLabel = (((cfg.button_label as string | undefined) ?? 'Open link').trim() || 'Open link').slice(0, 20);
   const subtitleRaw = ((cfg.subtitle as string | undefined) ?? '').trim();
   const subtitle = subtitleRaw ? subtitleRaw.slice(0, 80) : undefined;
+  const imageUrl = ((cfg.image_url as string | undefined) ?? '').trim() || undefined;
 
   // For comment private replies, Meta rejects template attachments. Fall back to
   // a plain-text DM containing the title + URL (still tappable, IG auto-linkifies).
@@ -838,6 +839,7 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
       elements: [{
         title,
         ...(subtitle ? { subtitle } : {}),
+        ...(imageUrl ? { image_url: imageUrl } : {}),
         default_action: { type: 'web_url', url },
         buttons: [{ type: 'web_url', url, title: buttonLabel }],
       }],

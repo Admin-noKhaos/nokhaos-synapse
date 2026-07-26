@@ -113,6 +113,10 @@ export type ActionConfig = {
   button_label?: string;
   /** For send_link_button: optional subtitle shown below the title on the card. */
   subtitle?: string;
+  /** For send_link_button: optional image shown at the top of the card.
+   *  Must be a publicly reachable HTTPS URL. Recommended 1.91:1 aspect ratio
+   *  (e.g. 1200×628) for horizontal cards, or 1:1 for square cards. */
+  image_url?: string;
 };
 
 /**
