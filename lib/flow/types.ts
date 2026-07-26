@@ -6,7 +6,7 @@ export type NodeKind = 'trigger' | 'ai' | 'condition' | 'action';
 export type TriggerType = 'new_dm' | 'comment_keyword' | 'story_reply' | 'button_click';
 export type AiType = 'classify_intent' | 'generate_reply' | 'score_lead' | 'tag' | 'moderate_comment';
 export type ConditionType = 'if_intent' | 'if_score_gt' | 'if_contains' | 'if_first_contact' | 'if_returning' | 'if_sentiment' | 'else';
-export type ActionType = 'send_dm' | 'send_buttons' | 'reply_comment' | 'send_link' | 'follow_up' | 'add_tag' | 'set_funnel' | 'flag_comment' | 'handoff_human';
+export type ActionType = 'send_dm' | 'send_buttons' | 'send_link_button' | 'reply_comment' | 'send_link' | 'follow_up' | 'add_tag' | 'set_funnel' | 'flag_comment' | 'handoff_human';
 
 /** A tappable button attached to a send_buttons message. Tapping it sends the
  *  title back as the lead's reply and fires `payload` as a button_click event. */
@@ -107,6 +107,12 @@ export type ActionConfig = {
   goal?: string;
   /** For follow_up: include the master doc when AI-generating the nudge (default true). */
   use_master_doc?: boolean;
+  /** For send_link_button: the URL the button opens (web_url). Required. */
+  link_url?: string;
+  /** For send_link_button: the label shown on the button (max ~20 chars, Meta limit). */
+  button_label?: string;
+  /** For send_link_button: optional subtitle shown below the title on the card. */
+  subtitle?: string;
 };
 
 /**

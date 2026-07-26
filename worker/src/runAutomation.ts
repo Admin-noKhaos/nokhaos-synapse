@@ -259,6 +259,7 @@ async function executeNode(node: FlowNode, ctx: RunContext): Promise<{ proceed: 
   if (node.kind === 'action') {
     if (node.type === 'send_dm') return actionSendDm(node, ctx);
     if (node.type === 'send_buttons') return actionSendButtons(node, ctx);
+    if (node.type === 'send_link_button') return actionSendLinkButton(node, ctx);
     if (node.type === 'reply_comment') return actionReplyComment(node, ctx);
     if (node.type === 'flag_comment') return actionFlagComment(node, ctx);
     if (node.type === 'follow_up') return actionFollowUp(node, ctx);
@@ -470,7 +471,23 @@ async function evaluateCondition(node: FlowNode, ctx: RunContext): Promise<{ pro
 // ─── Action nodes ────────────────────────────────────────────────────────────
 
 type IgQuickReply = { content_type: 'text'; title: string; payload: string };
-type IgMessagePayload = { text?: string; quick_replies?: IgQuickReply[] };
+type IgWebUrlButton = { type: 'web_url'; url: string; title: string };
+type IgGenericElement = {
+  title: string;
+  subtitle?: string;
+  image_url?: string;
+  default_action?: { type: 'web_url'; url: string };
+  buttons?: IgWebUrlButton[];
+};
+type IgTemplateAttachment = {
+  type: 'template';
+  payload: { template_type: 'generic'; elements: IgGenericElement[] };
+};
+type IgMessagePayload = {
+  text?: string;
+  quick_replies?: IgQuickReply[];
+  attachment?: IgTemplateAttachment;
+};
 
 // Send a message object to the lead via the Meta API and persist it as an 'us'
 // message. When this run was triggered by a comment, the first message is sent
@@ -564,8 +581,19 @@ async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persist
   ctx.dmAttempted = true;
   ctx.dmOk = false;
   // Platform-aware UTM rewriting: instagram-tagged links → facebook-tagged
-  // when sending via the FB Page connection.
+  // when sending via the FB Page connection. Applies to plain-text links AND
+  // template attachment button URLs (send_link_button).
   if (message.text) message = { ...message, text: adaptLinkPlatform(message.text, ctx) };
+  if (message.attachment) {
+    const els = message.attachment.payload.elements.map((el) => ({
+      ...el,
+      default_action: el.default_action
+        ? { ...el.default_action, url: adaptLinkPlatform(el.default_action.url, ctx) }
+        : el.default_action,
+      buttons: el.buttons?.map((b) => ({ ...b, url: adaptLinkPlatform(b.url, ctx) })),
+    }));
+    message = { ...message, attachment: { ...message.attachment, payload: { ...message.attachment.payload, elements: els } } };
+  }
   persistText = adaptLinkPlatform(persistText, ctx);
   const recipient = ctx.eventKind === 'comment' && ctx.commentId
     ? { comment_id: ctx.commentId }
@@ -775,6 +803,48 @@ async function actionSendButtons(node: FlowNode, ctx: RunContext): Promise<{ pro
     return { proceed: true };
   }
   await sendIgMessage(ctx, { text, quick_replies }, text);
+  return { proceed: true };
+}
+
+// Send a rich message card with a single URL button. Uses Meta's generic template
+// which is supported on both Instagram and Facebook Messenger. Because
+// comment-triggered private replies (recipient: { comment_id }) don't support
+// templates on IG, we fall back to a plain-text send in that case.
+async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
+  const cfg = node.config as Record<string, unknown>;
+  const url = ((cfg.link_url as string | undefined) ?? '').trim();
+  if (!url) {
+    console.warn('send_link_button: no link_url configured');
+    return { proceed: true };
+  }
+  const rawTitle = pickVariant(cfg) || ((cfg.text as string | undefined) ?? '').trim() || 'Watch the video';
+  const title = rawTitle.slice(0, 80); // Meta title limit ~80 chars
+  const buttonLabel = (((cfg.button_label as string | undefined) ?? 'Open link').trim() || 'Open link').slice(0, 20);
+  const subtitleRaw = ((cfg.subtitle as string | undefined) ?? '').trim();
+  const subtitle = subtitleRaw ? subtitleRaw.slice(0, 80) : undefined;
+
+  // For comment private replies, Meta rejects template attachments. Fall back to
+  // a plain-text DM containing the title + URL (still tappable, IG auto-linkifies).
+  if (ctx.eventKind === 'comment' && ctx.commentId) {
+    const plain = subtitle ? `${title}\n\n${subtitle}\n\n${url}` : `${title}\n\n${url}`;
+    await sendIgMessage(ctx, { text: plain }, plain);
+    return { proceed: true };
+  }
+
+  const attachment: IgTemplateAttachment = {
+    type: 'template',
+    payload: {
+      template_type: 'generic',
+      elements: [{
+        title,
+        ...(subtitle ? { subtitle } : {}),
+        default_action: { type: 'web_url', url },
+        buttons: [{ type: 'web_url', url, title: buttonLabel }],
+      }],
+    },
+  };
+  const persistText = subtitle ? `${title} — ${subtitle} (${url})` : `${title} (${url})`;
+  await sendIgMessage(ctx, { attachment }, persistText);
   return { proceed: true };
 }
 
