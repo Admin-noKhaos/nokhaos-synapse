@@ -39,6 +39,9 @@ type RunContext = {
   accountPlatform?: string;
   /** Facebook Page id — present for platform 'facebook'; send target host id. */
   accountPageId?: string | null;
+  /** Our internal `leads.id` UUID — appended to every outbound URL as `lead_id`
+   *  for per-contact click attribution on the destination side. */
+  leadId?: string;
   leadIgUserId: string;
   messageText: string;
   transcript: string;
@@ -577,24 +580,49 @@ function adaptLinkPlatform(text: string, ctx: RunContext): string {
   return out;
 }
 
+// Append per-contact tracking to every URL in `text` so the destination site
+// can attribute clicks to a specific lead. Adds `utm_content=<meta_user_id>` and
+// `lead_id=<our_uuid>` — both idempotent (never overwrites existing values).
+function appendContactParams(text: string, ctx: RunContext): string {
+  if (!text) return text;
+  const psid = ctx.leadIgUserId ?? '';
+  const leadUuid = ctx.leadId ?? '';
+  if (!psid && !leadUuid) return text;
+  return text.replace(/https?:\/\/[^\s]+/g, (raw) => {
+    // Strip trailing sentence punctuation from the URL match — it isn't URL.
+    const trailing = raw.match(/[.,)!?;:]+$/)?.[0] ?? '';
+    const bare = trailing ? raw.slice(0, -trailing.length) : raw;
+    try {
+      const u = new URL(bare);
+      if (psid && !u.searchParams.has('utm_content')) u.searchParams.set('utm_content', psid);
+      if (leadUuid && !u.searchParams.has('lead_id')) u.searchParams.set('lead_id', leadUuid);
+      return u.toString() + trailing;
+    } catch {
+      return raw;
+    }
+  });
+}
+
 async function sendIgMessage(ctx: RunContext, message: IgMessagePayload, persistText: string): Promise<void> {
   ctx.dmAttempted = true;
   ctx.dmOk = false;
-  // Platform-aware UTM rewriting: instagram-tagged links → facebook-tagged
-  // when sending via the FB Page connection. Applies to plain-text links AND
-  // template attachment button URLs (send_link_button).
-  if (message.text) message = { ...message, text: adaptLinkPlatform(message.text, ctx) };
+  // URL adaptation pipeline (order matters):
+  //  1. adaptLinkPlatform  — swap instagram-* UTMs to facebook-* on FB sends
+  //  2. appendContactParams — tack on utm_content + lead_id for click attribution
+  // Applies to plain-text links AND template attachment button URLs.
+  const adaptText = (s: string) => appendContactParams(adaptLinkPlatform(s, ctx), ctx);
+  if (message.text) message = { ...message, text: adaptText(message.text) };
   if (message.attachment) {
     const els = message.attachment.payload.elements.map((el) => ({
       ...el,
       default_action: el.default_action
-        ? { ...el.default_action, url: adaptLinkPlatform(el.default_action.url, ctx) }
+        ? { ...el.default_action, url: adaptText(el.default_action.url) }
         : el.default_action,
-      buttons: el.buttons?.map((b) => ({ ...b, url: adaptLinkPlatform(b.url, ctx) })),
+      buttons: el.buttons?.map((b) => ({ ...b, url: adaptText(b.url) })),
     }));
     message = { ...message, attachment: { ...message.attachment, payload: { ...message.attachment.payload, elements: els } } };
   }
-  persistText = adaptLinkPlatform(persistText, ctx);
+  persistText = adaptText(persistText);
   const recipient = ctx.eventKind === 'comment' && ctx.commentId
     ? { comment_id: ctx.commentId }
     : { id: ctx.leadIgUserId };

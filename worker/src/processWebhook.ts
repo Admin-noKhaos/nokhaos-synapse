@@ -505,6 +505,7 @@ export async function handleEvent(ev: Normalized) {
       accountPlatform: account.platform ?? 'instagram',
       accountPageId: account.page_id,
       leadIgUserId: senderIgId,
+      leadId: lead.id,
       leadUsername,
       messageText: ev.text ?? '',
       transcript,
