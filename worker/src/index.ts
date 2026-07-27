@@ -7,6 +7,7 @@ import { db } from './db.js';
 import { processWebhookEvent } from './processWebhook.js';
 import { pollComments } from './commentPoller.js';
 import { runDueFollowups } from './followupRunner.js';
+import { checkTokenHealth } from './tokenHealth.js';
 
 let processing = false;
 
@@ -70,6 +71,17 @@ async function followupTick() {
 }
 setInterval(followupTick, 60_000).unref();
 followupTick();
+
+// Token health monitor: validity pings + email alerts on dead tokens.
+async function tokenHealthTick() {
+  try {
+    await checkTokenHealth();
+  } catch (e) {
+    console.error('[token-health] tick threw', e);
+  }
+}
+setInterval(tokenHealthTick, ENV.TOKEN_HEALTH_INTERVAL_MS).unref();
+tokenHealthTick();
 
 createServer((req, res) => {
   if (req.url === '/health') {

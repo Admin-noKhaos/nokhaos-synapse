@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from './db.js';
 import { ENV } from './env.js';
 import { workerCall } from './anthropic.js';
+import { recordSendOutcome } from './tokenHealth.js';
 
 type FlowNode = {
   id: string;
@@ -676,6 +677,9 @@ async function sendIgMessage(
       }
       if (!r.ok) {
         console.error('send message meta call failed', r.status, r.ok ? '' : errText);
+        // Health monitor: auth-like failures count toward the account's
+        // unhealthy threshold (token death / messaging access revoked).
+        await recordSendOutcome(ctx.accountId, false, errText);
         // Lock-bound failure for a direct DM (not a comment private reply): schedule
         // retries. Most inbox locks self-release within 24h; one of the retries lands.
         if ('id' in recipient && isLockError && persistText.trim()) {
@@ -685,6 +689,7 @@ async function sendIgMessage(
       }
     }
     ctx.dmOk = true;
+    await recordSendOutcome(ctx.accountId, true);
     const j = await r.json() as { message_id?: string };
 
     await db.from('messages').insert({

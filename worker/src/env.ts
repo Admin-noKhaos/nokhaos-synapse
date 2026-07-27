@@ -22,4 +22,9 @@ export const ENV = {
   COMMENT_POLL_MEDIA_LIMIT: Number(process.env.COMMENT_POLL_MEDIA_LIMIT ?? 12),       // recent posts to scan
   COMMENT_POLL_MAX_PER_CYCLE: Number(process.env.COMMENT_POLL_MAX_PER_CYCLE ?? 20),   // comments handled per cycle (paces backfill)
   COMMENT_POLL_LOOKBACK_HOURS: Number(process.env.COMMENT_POLL_LOOKBACK_HOURS ?? 168), // ignore comments older than 7 days
+  // Token health monitor: validity ping cadence + email alerts (Resend HTTP API).
+  TOKEN_HEALTH_INTERVAL_MS: Number(process.env.TOKEN_HEALTH_INTERVAL_MS ?? 120_000), // 2 min
+  RESEND_API_KEY: process.env.RESEND_API_KEY ?? '',
+  ALERT_EMAIL: process.env.ALERT_EMAIL ?? 'mshanalak@gmail.com',
+  APP_URL: process.env.NEXT_PUBLIC_APP_URL ?? 'https://synapse.nokhaos.com',
 };

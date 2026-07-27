@@ -10,6 +10,7 @@ import { db } from './db.js';
 import { ENV } from './env.js';
 import { workerCall } from './anthropic.js';
 import { sanitizeReply } from './runAutomation.js';
+import { recordSendOutcome } from './tokenHealth.js';
 
 type FollowupRow = {
   id: string; org_id: string; conversation_id: string; account_id: string | null;
@@ -86,7 +87,7 @@ async function processFollowup(row: FollowupRow): Promise<void> {
   if (!text) { await mark(row.id, 'cancelled'); return; }
 
   const host = acct.platform === 'facebook' ? 'graph.facebook.com' : 'graph.instagram.com';
-  const ok = await sendDm(host, hostId, acct.access_token, row.lead_ig_user_id, text);
+  const ok = await sendDm(host, hostId, acct.access_token, row.lead_ig_user_id, text, row.account_id ?? undefined);
   if (ok) {
     await db.from('messages').insert({
       org_id: row.org_id, conversation_id: row.conversation_id,
@@ -159,7 +160,7 @@ async function generateFollowup(row: FollowupRow, username: string | null): Prom
   }
 }
 
-async function sendDm(host: string, hostId: string, token: string, recipientId: string, text: string): Promise<boolean> {
+async function sendDm(host: string, hostId: string, token: string, recipientId: string, text: string, accountId?: string): Promise<boolean> {
   try {
     const url = `https://${host}/${ENV.META_GRAPH_VERSION}/${hostId}/messages`;
     const r = await fetch(url, {
@@ -167,7 +168,13 @@ async function sendDm(host: string, hostId: string, token: string, recipientId: 
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
     });
-    if (!r.ok) { log('send failed', r.status, (await r.text()).slice(0, 160)); return false; }
+    if (!r.ok) {
+      const errText = await r.text();
+      log('send failed', r.status, errText.slice(0, 160));
+      if (accountId) await recordSendOutcome(accountId, false, errText);
+      return false;
+    }
+    if (accountId) await recordSendOutcome(accountId, true);
     return true;
   } catch (e) {
     log('send error', e instanceof Error ? e.message : String(e));
