@@ -101,6 +101,25 @@ export async function runAutomationForMessage(
     commentMediaType?: string;
   },
 ) {
+  const brainMd = input.brainMd ?? '';
+  const eventKind: EventKind = input.eventKind ?? 'dm';
+  const isFirstContact = input.isFirstContact ?? false;
+
+  // ── Pending-card funnel ────────────────────────────────────────────────────
+  // A comment-triggered card flow sends one private reply asking the lead to
+  // reply "LINK" or tap the quick reply. When that message arrives (their DM
+  // opens the 24h window), deliver the card they're owed and stop — no other
+  // automations should double-fire on this control message.
+  const isCardRequest =
+    (eventKind === 'postback' && (input.postbackPayload ?? '').trim() === 'LINKCARD') ||
+    (eventKind === 'dm' && /\blink\b/i.test(input.messageText ?? ''));
+  if (isCardRequest) {
+    const delivered = await deliverPendingCard({ ...input, brainMd, eventKind, isFirstContact } as RunContext);
+    if (delivered) return;
+    // No pending card → fall through to normal automations (someone may just
+    // have typed a sentence containing "link").
+  }
+
   // Pull all live automations for the org. We run *all* of them in series.
   const { data: automations, error } = await db
     .from('automations')
@@ -112,10 +131,6 @@ export async function runAutomationForMessage(
     return;
   }
   if (!automations || automations.length === 0) return;
-
-  const brainMd = input.brainMd ?? '';
-  const eventKind: EventKind = input.eventKind ?? 'dm';
-  const isFirstContact = input.isFirstContact ?? false;
   for (const a of automations) {
     const graph = (a.graph as FlowGraph) ?? { nodes: [], edges: [] };
     if (!graph.nodes?.length) continue;
@@ -909,25 +924,78 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
   };
   const persistText = subtitle ? `${title} — ${subtitle} (${url})` : `${title} (${url})`;
 
-  // Comment-triggered path (recipient: comment_id) doesn't allow template
-  // attachments AND the direct-DM follow-up requires Advanced Access to
-  // instagram_manage_messages — which we don't have yet, so the card silently
-  // drops for non-app-role users. Send ONE message via private_reply with the
-  // title + link inline. It's tappable (IG auto-linkifies), always delivers,
-  // and no lead is left with a preface-only message.
-  //
-  // TODO: once Advanced Access is granted via App Review, restore the two-step
-  // (preface + card) for comment triggers so people get the pretty card.
+  // Comment-triggered path: Meta allows exactly ONE private reply per comment
+  // and rejects template attachments in it — and a direct-DM follow-up only
+  // works once the lead has messaged us (24h window). So the single private
+  // reply asks them to reply "LINK" or tap the quick reply; either opens the
+  // window, and the pending-card handler in runAutomationForMessage then
+  // delivers the full card. The card config is parked in pending_cards.
   if (ctx.eventKind === 'comment' && ctx.commentId) {
-    const plain = subtitle
-      ? `${title}\n\n${subtitle}\n\n${url}`
-      : `${title}\n\n${url}`;
-    await sendIgMessage(ctx, { text: plain }, plain);
+    await db.from('pending_cards').upsert({
+      conversation_id: ctx.conversationId,
+      org_id: ctx.orgId,
+      lead_ig_user_id: ctx.leadIgUserId,
+      card: { title, subtitle: subtitle ?? null, image_url: imageUrl ?? null, url, button_label: buttonLabel },
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'conversation_id' });
+
+    const prompt = 'Reply with the word LINK or tap the button below to get it 👇';
+    const quick_replies: IgQuickReply[] = [
+      { content_type: 'text', title: 'Get the link 👉', payload: 'LINKCARD' },
+    ];
+    await sendIgMessage(ctx, { text: prompt, quick_replies }, prompt);
     return { proceed: true };
   }
 
   await sendIgMessage(ctx, { attachment }, persistText);
   return { proceed: true };
+}
+
+// Deliver the card a conversation is owed (see the comment-triggered branch of
+// actionSendLinkButton). Called when the lead replies "LINK" or taps the quick
+// reply — their message opened the 24h window, so the template send is allowed.
+// Returns true when a pending card existed and delivery was attempted.
+async function deliverPendingCard(ctx: RunContext): Promise<boolean> {
+  const { data: row, error } = await db
+    .from('pending_cards')
+    .select('card')
+    .eq('conversation_id', ctx.conversationId)
+    .maybeSingle();
+  if (error) { console.error('pending_cards lookup failed', error.message); return false; }
+  if (!row?.card) return false;
+
+  const card = row.card as { title?: string; subtitle?: string | null; image_url?: string | null; url?: string; button_label?: string };
+  const title = (card.title ?? 'Here you go').slice(0, 80);
+  const subtitle = card.subtitle?.trim() ? card.subtitle.trim().slice(0, 80) : undefined;
+  const imageUrl = card.image_url?.trim() || undefined;
+  const url = (card.url ?? '').trim();
+  if (!url) { await db.from('pending_cards').delete().eq('conversation_id', ctx.conversationId); return false; }
+  const buttonLabel = (card.button_label ?? 'Open link').slice(0, 20);
+
+  const attachment: IgTemplateAttachment = {
+    type: 'template',
+    payload: {
+      template_type: 'generic',
+      elements: [{
+        title,
+        ...(subtitle ? { subtitle } : {}),
+        ...(imageUrl ? { image_url: imageUrl } : {}),
+        default_action: { type: 'web_url', url },
+        buttons: [{ type: 'web_url', url, title: buttonLabel }],
+      }],
+    },
+  };
+  const persistText = subtitle ? `${title} — ${subtitle} (${url})` : `${title} (${url})`;
+  await sendIgMessage(ctx, { attachment }, persistText);
+
+  if (ctx.dmOk) {
+    await db.from('pending_cards').delete().eq('conversation_id', ctx.conversationId);
+    console.log(`pending card delivered for conv ${ctx.conversationId.slice(0, 8)}`);
+  } else {
+    // Send failed — keep the row so their next "LINK" message retries.
+    console.warn(`pending card send failed for conv ${ctx.conversationId.slice(0, 8)} — kept for retry`);
+  }
+  return true;
 }
 
 async function actionSendLink(node: FlowNode, ctx: RunContext): Promise<{ proceed: boolean }> {
