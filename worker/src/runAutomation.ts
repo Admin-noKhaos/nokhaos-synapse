@@ -910,24 +910,19 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
   const persistText = subtitle ? `${title} — ${subtitle} (${url})` : `${title} (${url})`;
 
   // Comment-triggered path (recipient: comment_id) doesn't allow template
-  // attachments. Send two messages: a short private_reply to open the messaging
-  // window, then the card via the normal thread (recipient: id). The preface
-  // rotates through natural variants (matches the tone flow authors use for
-  // plain-text send_dm variants). Overridable per node via config.preface_variants.
+  // attachments AND the direct-DM follow-up requires Advanced Access to
+  // instagram_manage_messages — which we don't have yet, so the card silently
+  // drops for non-app-role users. Send ONE message via private_reply with the
+  // title + link inline. It's tappable (IG auto-linkifies), always delivers,
+  // and no lead is left with a preface-only message.
+  //
+  // TODO: once Advanced Access is granted via App Review, restore the two-step
+  // (preface + card) for comment triggers so people get the pretty card.
   if (ctx.eventKind === 'comment' && ctx.commentId) {
-    const DEFAULT_PREFACES = [
-      'Here it is.',
-      'Here you go.',
-      'Check it out.',
-      'Boom. Here you go.',
-      "Here's the link",
-    ];
-    const rawVariants = Array.isArray(cfg.preface_variants)
-      ? (cfg.preface_variants as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-      : DEFAULT_PREFACES;
-    const preface = rawVariants[Math.floor(Math.random() * rawVariants.length)];
-    await sendIgMessage(ctx, { text: preface }, preface, { asPrivateReply: true });
-    await sendIgMessage(ctx, { attachment }, persistText, { asPrivateReply: false });
+    const plain = subtitle
+      ? `${title}\n\n${subtitle}\n\n${url}`
+      : `${title}\n\n${url}`;
+    await sendIgMessage(ctx, { text: plain }, plain);
     return { proceed: true };
   }
 
