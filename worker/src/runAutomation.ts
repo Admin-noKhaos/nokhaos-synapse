@@ -944,6 +944,12 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
       { content_type: 'text', title: 'Get the link 👉', payload: 'LINKCARD' },
     ];
     await sendIgMessage(ctx, { text: prompt, quick_replies }, prompt);
+    if (!ctx.dmOk) {
+      // IG can reject quick replies on private replies — retry with plain text
+      // so the lead still gets the "reply LINK" instruction.
+      const plainPrompt = 'Reply with the word LINK and I\'ll send it right over 👇';
+      await sendIgMessage(ctx, { text: plainPrompt }, plainPrompt);
+    }
     return { proceed: true };
   }
 
