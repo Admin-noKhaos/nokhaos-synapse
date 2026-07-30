@@ -4,7 +4,20 @@ import { createServerClient } from '@supabase/ssr';
 const PUBLIC_PATHS = ['/login', '/signup', '/auth/callback', '/api/meta/webhook', '/api/meta/oauth/callback', '/api/meta/deauth', '/l', '/yt', '/api/health', '/privacy', '/terms', '/data-deletion'];
 // note: /api/dev/simulate-dm requires auth (uses session); intentionally NOT public.
 
+// Link domains: client-branded hosts that only serve the smart-redirect routes.
+// Any other path on these hosts forwards to the client's main site so nobody
+// lands on the Synapse login page from a client's domain.
+const LINK_HOSTS: Record<string, string> = {
+  'go.noproductbusiness.com': 'https://www.noproductbusiness.com',
+};
+
 export async function middleware(req: NextRequest) {
+  const host = (req.headers.get('host') ?? '').toLowerCase().split(':')[0];
+  const linkFallback = LINK_HOSTS[host];
+  if (linkFallback && !req.nextUrl.pathname.startsWith('/yt')) {
+    return NextResponse.redirect(linkFallback, 302);
+  }
+
   const res = NextResponse.next({ request: req });
 
   // Refresh the auth cookie on every request — keeps sessions alive in server components.
