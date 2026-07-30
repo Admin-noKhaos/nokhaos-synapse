@@ -195,7 +195,7 @@ function conditionLabel(t: ConditionType) {
   return { if_intent: 'If intent =', if_score_gt: 'If lead score >', if_contains: 'If text contains', if_first_contact: 'If first message', if_returning: 'If returning lead', if_sentiment: 'If sentiment =', else: 'Else' }[t];
 }
 function actionLabel(t: ActionType) {
-  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', reply_comment: 'Reply to comment', send_link: 'Send funnel link', follow_up: 'Follow up later', add_tag: 'Tag lead', set_funnel: 'Set funnel', flag_comment: 'Flag for moderation', handoff_human: 'Notify human' }[t];
+  return { send_dm: 'Send DM', send_buttons: 'Send DM with buttons', send_link_button: 'Send link card', reply_comment: 'Reply to comment', send_link: 'Send funnel link', follow_up: 'Follow up later', add_tag: 'Tag lead', set_funnel: 'Set funnel', flag_comment: 'Flag for moderation', handoff_human: 'Notify human' }[t];
 }
 
 // ─── Default templates (used by the "Create from template" empty-state) ────
