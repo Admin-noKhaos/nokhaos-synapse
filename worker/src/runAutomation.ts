@@ -873,6 +873,11 @@ function youtubeVideoId(url: string): string | null {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
     const ok = (s: string) => /^[\w-]{8,}$/.test(s);
+    // Smart-redirect links (/yt/<id> on our own or a client's link domain).
+    // These are plain https URLs that bounce into the YouTube app; the video id
+    // is the last path segment, so thumbnails still resolve.
+    const parts0 = u.pathname.split('/').filter(Boolean);
+    if (parts0[0] === 'yt' && parts0[1] && ok(parts0[1])) return parts0[1];
     if (host === 'youtu.be' || host === 'www.youtu.be') {
       const id = u.pathname.split('/').filter(Boolean)[0] ?? '';
       return ok(id) ? id : null;
