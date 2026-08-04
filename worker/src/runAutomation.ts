@@ -596,6 +596,38 @@ function adaptLinkPlatform(text: string, ctx: RunContext): string {
   return out;
 }
 
+// The channel this run came through, e.g. "instagram-reel" / "facebook-post" /
+// "instagram-story". Used to auto-tag links that don't carry their own source.
+function surfaceTag(ctx: RunContext): string {
+  const platform = ctx.accountPlatform === 'facebook' ? 'facebook' : 'instagram';
+  let surface = 'dm';
+  if (ctx.isStoryReply) surface = 'story';
+  else if (ctx.eventKind === 'comment') {
+    surface = (ctx.commentMediaType ?? '').toUpperCase() === 'REELS' ? 'reel' : 'post';
+  }
+  return `${platform}-${surface}`;
+}
+
+// Auto-tag outbound links that have no source of their own, so every
+// destination gets attribution without the flow author hand-writing UTMs.
+// Idempotent: links that already set utm_source / el keep their own values.
+function addSurfaceUtms(text: string, ctx: RunContext): string {
+  if (!text) return text;
+  const tag = surfaceTag(ctx);
+  return text.replace(/https?:\/\/[^\s]+/g, (raw) => {
+    const trailing = raw.match(/[.,)!?;:]+$/)?.[0] ?? '';
+    const bare = trailing ? raw.slice(0, -trailing.length) : raw;
+    try {
+      const u = new URL(bare);
+      if (!u.searchParams.has('utm_source')) u.searchParams.set('utm_source', tag);
+      if (!u.searchParams.has('el')) u.searchParams.set('el', tag);
+      return u.toString() + trailing;
+    } catch {
+      return raw;
+    }
+  });
+}
+
 // Append per-contact tracking to every URL in `text` so the destination site
 // can attribute clicks to a specific lead. Adds `utm_content=<meta_user_id>` and
 // `lead_id=<our_uuid>` — both idempotent (never overwrites existing values).
@@ -629,9 +661,10 @@ async function sendIgMessage(
   ctx.dmOk = false;
   // URL adaptation pipeline (order matters):
   //  1. adaptLinkPlatform  — swap instagram-* UTMs to facebook-* on FB sends
-  //  2. appendContactParams — tack on utm_content + lead_id for click attribution
+  //  2. addSurfaceUtms     — tag links that carry no source of their own
+  //  3. appendContactParams — tack on utm_content + lead_id for click attribution
   // Applies to plain-text links AND template attachment button URLs.
-  const adaptText = (s: string) => appendContactParams(adaptLinkPlatform(s, ctx), ctx);
+  const adaptText = (s: string) => appendContactParams(addSurfaceUtms(adaptLinkPlatform(s, ctx), ctx), ctx);
   if (message.text) message = { ...message, text: adaptText(message.text) };
   if (message.attachment) {
     const els = message.attachment.payload.elements.map((el) => ({
@@ -945,7 +978,10 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
       conversation_id: ctx.conversationId,
       org_id: ctx.orgId,
       lead_ig_user_id: ctx.leadIgUserId,
-      card: { title, subtitle: subtitle ?? null, image_url: imageUrl ?? null, url, button_label: buttonLabel },
+      // Bake the surface tag in now: this card is delivered later, on the lead's
+      // "LINK" reply, where the live context would read as a DM and mis-attribute
+      // the click. addSurfaceUtms is idempotent so delivery won't overwrite it.
+      card: { title, subtitle: subtitle ?? null, image_url: imageUrl ?? null, url: addSurfaceUtms(url, ctx), button_label: buttonLabel },
       created_at: new Date().toISOString(),
     }, { onConflict: 'conversation_id' });
 

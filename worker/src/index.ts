@@ -7,7 +7,7 @@ import { db } from './db.js';
 import { processWebhookEvent } from './processWebhook.js';
 import { pollComments } from './commentPoller.js';
 import { runDueFollowups } from './followupRunner.js';
-import { checkTokenHealth } from './tokenHealth.js';
+import { checkTokenHealth, checkLinkDomains } from './tokenHealth.js';
 
 let processing = false;
 
@@ -73,11 +73,17 @@ setInterval(followupTick, 60_000).unref();
 followupTick();
 
 // Token health monitor: validity pings + email alerts on dead tokens.
+// Also checks the smart-redirect link domains flows send their video links through.
 async function tokenHealthTick() {
   try {
     await checkTokenHealth();
   } catch (e) {
     console.error('[token-health] tick threw', e);
+  }
+  try {
+    await checkLinkDomains();
+  } catch (e) {
+    console.error('[token-health] link check threw', e);
   }
 }
 setInterval(tokenHealthTick, ENV.TOKEN_HEALTH_INTERVAL_MS).unref();

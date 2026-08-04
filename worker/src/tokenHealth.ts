@@ -143,6 +143,93 @@ export async function checkTokenHealth(): Promise<void> {
   }
 }
 
+// ── Link-domain monitor ──────────────────────────────────────────────────────
+// Every video link Phil sends now routes through a smart-redirect host
+// (go.noproductbusiness.com/yt/<id>). If that host or its DNS breaks, every
+// card button in every flow becomes a dead link — silently. Ping the real
+// links used by live flows and alert if they stop redirecting.
+
+const linkFailures = new Map<string, number>();
+const linkAlertedAt = new Map<string, number>();
+const LINK_FAILURE_THRESHOLD = 2;
+
+export async function checkLinkDomains(): Promise<void> {
+  try {
+    const { data: rows, error } = await db
+      .from('automations')
+      .select('graph')
+      .eq('status', 'live');
+    if (error) { log('link check: load automations failed', error.message); return; }
+
+    // Collect one representative /yt/ link per host across all live flows.
+    const byHost = new Map<string, string>();
+    for (const r of rows ?? []) {
+      for (const m of JSON.stringify(r.graph ?? {}).matchAll(/https?:\/\/[^"\\\s]+\/yt\/[\w-]+/g)) {
+        try { byHost.set(new URL(m[0]).host, m[0]); } catch { /* skip */ }
+      }
+    }
+
+    for (const [host, sampleUrl] of byHost) {
+      let healthy = false;
+      try {
+        const r = await fetch(sampleUrl, { redirect: 'manual' });
+        // 2xx (iOS deep-link page) or 3xx (redirect) both mean it's working.
+        healthy = r.status < 400;
+        if (!healthy) log(`link host ${host} returned ${r.status}`);
+      } catch (e) {
+        log(`link host ${host} unreachable`, e instanceof Error ? e.message : String(e));
+      }
+
+      const fails = healthy ? 0 : (linkFailures.get(host) ?? 0) + 1;
+      linkFailures.set(host, fails);
+
+      if (healthy) {
+        if (linkAlertedAt.has(host)) {
+          linkAlertedAt.delete(host);
+          log(`link host ${host} recovered`);
+          await sendLinkEmail(host, 'recovered');
+        }
+        continue;
+      }
+      if (fails < LINK_FAILURE_THRESHOLD) continue;
+      const last = linkAlertedAt.get(host) ?? 0;
+      if (Date.now() - last < 3_600_000) continue;
+      linkAlertedAt.set(host, Date.now());
+      log(`link host ${host} DOWN after ${fails} checks — alerting`);
+      await sendLinkEmail(host, 'down', sampleUrl);
+    }
+  } catch (e) {
+    log('checkLinkDomains error', e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function sendLinkEmail(host: string, kind: 'down' | 'recovered', sampleUrl?: string): Promise<void> {
+  if (!ENV.RESEND_API_KEY) return;
+  const subject = kind === 'down'
+    ? `⚠️ Synapse: link domain ${host} is down`
+    : `✅ Synapse: link domain ${host} is back`;
+  const html = kind === 'down'
+    ? `<p>The smart-redirect host <b>${host}</b> stopped responding.</p>
+       <p>Every video link sent from flows using this domain is currently a dead link for leads.</p>
+       ${sampleUrl ? `<p>Failing URL: <code>${sampleUrl}</code></p>` : ''}
+       <p><b>Check:</b> the domain's DNS record and the Vercel project it points to.</p>`
+    : `<p><b>${host}</b> is responding again. Links are working. No action needed.</p>`;
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ENV.RESEND_API_KEY}` },
+      body: JSON.stringify({
+        from: 'Synapse Alerts <onboarding@resend.dev>',
+        to: [ENV.ALERT_EMAIL], subject, html,
+      }),
+    });
+    if (!r.ok) log('link alert email failed', r.status);
+    else log(`link alert email sent (${kind}) for ${host}`);
+  } catch (e) {
+    log('link alert email error', e instanceof Error ? e.message : String(e));
+  }
+}
+
 // Alert at most once per account per hour.
 async function maybeAlert(acct: Account, reason: string): Promise<void> {
   const last = acct.last_health_alert_at ? Date.parse(acct.last_health_alert_at) : 0;
