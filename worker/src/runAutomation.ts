@@ -985,16 +985,23 @@ async function actionSendLinkButton(node: FlowNode, ctx: RunContext): Promise<{ 
       created_at: new Date().toISOString(),
     }, { onConflict: 'conversation_id' });
 
-    const prompt = 'Reply with the word LINK or tap the button below to get it 👇';
+    // The link goes IN this message. Meta allows exactly one private reply per
+    // comment, and if the lead never writes back the 24h window never opens —
+    // so anything we hold back is unreachable forever. An earlier version asked
+    // them to reply "LINK" first and stranded ~24% of leads.
+    // The quick reply is a bonus: tapping it opens the window and delivers the
+    // full card, but nobody needs it to get what they asked for.
+    const linkText = subtitle
+      ? `${title}\n\n${subtitle}\n\n${url}`
+      : `${title}\n\n${url}`;
     const quick_replies: IgQuickReply[] = [
-      { content_type: 'text', title: 'Get the link 👉', payload: 'LINKCARD' },
+      { content_type: 'text', title: 'Watch now 👉', payload: 'LINKCARD' },
     ];
-    await sendIgMessage(ctx, { text: prompt, quick_replies }, prompt);
+    await sendIgMessage(ctx, { text: linkText, quick_replies }, linkText);
     if (!ctx.dmOk) {
-      // IG can reject quick replies on private replies — retry with plain text
-      // so the lead still gets the "reply LINK" instruction.
-      const plainPrompt = 'Reply with the word LINK and I\'ll send it right over 👇';
-      await sendIgMessage(ctx, { text: plainPrompt }, plainPrompt);
+      // Quick replies can be rejected on private replies — resend as plain text
+      // so the link itself still lands.
+      await sendIgMessage(ctx, { text: linkText }, linkText);
     }
     return { proceed: true };
   }

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
-const PUBLIC_PATHS = ['/login', '/signup', '/auth/callback', '/api/meta/webhook', '/api/meta/oauth/callback', '/api/meta/deauth', '/l', '/yt', '/api/health', '/privacy', '/terms', '/data-deletion'];
+const PUBLIC_PATHS = ['/login', '/signup', '/auth/callback', '/api/meta/webhook', '/api/meta/oauth/callback', '/api/meta/deauth', '/l', '/yt', '/yt-link', '/api/health', '/privacy', '/terms', '/data-deletion'];
 // note: /api/dev/simulate-dm requires auth (uses session); intentionally NOT public.
 
 // Link domains: client-branded hosts that only serve the smart-redirect routes.
@@ -11,10 +11,14 @@ const LINK_HOSTS: Record<string, string> = {
   'go.noproductbusiness.com': 'https://www.noproductbusiness.com',
 };
 
+// The only paths a link host may serve: the redirects themselves and the
+// generator the client's team uses to make them.
+const linkHostServes = (path: string) => path.startsWith('/yt/') || path === '/yt-link';
+
 export async function middleware(req: NextRequest) {
   const host = (req.headers.get('host') ?? '').toLowerCase().split(':')[0];
   const linkFallback = LINK_HOSTS[host];
-  if (linkFallback && !req.nextUrl.pathname.startsWith('/yt')) {
+  if (linkFallback && !linkHostServes(req.nextUrl.pathname)) {
     return NextResponse.redirect(linkFallback, 302);
   }
 
