@@ -54,6 +54,11 @@ export type TriggerConfig = {
   /** For comment_keyword / story_reply / new_dm: limit to events from a specific
    *  platform. Undefined / 'any' = fire on both. */
   platform?: 'any' | 'instagram' | 'facebook';
+  /** How `contains` is matched. 'contains' (default) fires when any term appears
+   *  as a whole word anywhere in the text. 'exact' fires only when the whole
+   *  message *is* the term, ignoring punctuation/emoji — used for DM triggers so
+   *  a keyword like "ME" doesn't fire on "send me the link". */
+  match?: 'contains' | 'exact';
   /** For button_click: the payload of the tapped button this trigger fires on. */
   payload?: string;
 };

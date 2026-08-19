@@ -148,8 +148,11 @@ async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string,
   const triggers = graph.nodes.filter((n) => n.kind === 'trigger' && triggerMatchesEvent(n, ctx));
   if (triggers.length === 0) return;
 
+  // One shared visited set across triggers: when two triggers match the same
+  // event, any action node they both reach must still execute only once.
+  const visited = new Set<string>();
   for (const trigger of triggers) {
-    await traverse(graph, trigger.id, ctx, new Set(), automationId, automationName);
+    await traverse(graph, trigger.id, ctx, visited, automationId, automationName);
   }
 }
 
@@ -160,7 +163,23 @@ async function runGraph(graph: FlowGraph, ctx: RunContext, automationId: string,
 function keywordMatches(node: FlowNode, text: string): boolean {
   const raw = (node.config.contains as string | undefined)?.trim();
   if (!raw) return true; // empty = match all
+  if ((node.config.match as string | undefined) === 'exact') return keywordExactMatches(raw, text);
   return keywordListMatches(raw, text);
+}
+
+// Exact mode: the whole message must BE one of the terms. Punctuation and emoji
+// are ignored, so "CHALLENGE!", "challenge 🔥" and " Challenge " all match, while
+// "send me the challenge details" does not. Used by DM triggers, where a
+// conversational message would otherwise trip common keywords like ME or AI.
+function keywordExactMatches(raw: string | undefined, text: string): boolean {
+  const terms = (raw ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (terms.length === 0) return false;
+  const normalized = (text ?? '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return terms.includes(normalized);
 }
 
 // True if ANY comma-separated term in `raw` appears as a whole word in `text`.
@@ -190,7 +209,10 @@ function triggerMatchesEvent(node: FlowNode, ctx: RunContext): boolean {
   switch (node.type) {
     case 'new_dm':
       // from_handles filter — would need lead username; skip for v1
-      return ctx.eventKind === 'dm' && keywordMatches(node, ctx.messageText);
+      // Story replies arrive as DMs but have their own trigger type. Excluding
+      // them here stops a flow that carries both triggers from firing twice on
+      // the same inbound message.
+      return ctx.eventKind === 'dm' && ctx.isStoryReply !== true && keywordMatches(node, ctx.messageText);
     case 'comment_keyword': {
       if (ctx.eventKind !== 'comment' || !keywordMatches(node, ctx.messageText)) return false;
       // Exclude keywords: skip comments already handled by a keyword flow.
